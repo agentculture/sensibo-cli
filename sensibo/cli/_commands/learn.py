@@ -31,9 +31,8 @@ Sensibo devices are cloud-only — there is no LAN-local API — so readings are
 polled from Sensibo's cloud and persisted locally. "Locally" means the data
 comes to rest on your machine, not that the transport avoids the internet.
 
-STATUS: the introspection verbs and the read-only fleet verbs (devices, read)
-exist today. AC control, collection, and automation verbs are not implemented
-yet.
+STATUS: all three pillars are shipped, plus the integration surfaces
+(Python import, MCP, LAN web dashboard).
 
 Commands
 --------
@@ -45,13 +44,26 @@ Commands
   sensibo cli overview       Describe the CLI surface itself.
   sensibo devices            List the fleet from one API call.
   sensibo read <id>          One snapshot of every current reading.
+  sensibo set <pod> ...      Control the AC (dry-run; --apply commits).
+  sensibo collect            Poll on a cadence into the local store.
+  sensibo query ...          Offline reads from the local store.
+  sensibo room ...           Name sensing locations; flag stale sensors.
+  sensibo rule ...           Local rules engine (dry-run before arm).
+  sensibo smartmode ...      Climate React (runs in Sensibo's cloud).
+  sensibo schedule ...       Cloud schedules.
+  sensibo timer ...          Cloud timers.
+  sensibo mcp serve          MCP server (needs the sensibo-cli[mcp] extra).
+  sensibo web                LAN dashboard: open reads, token-gated writes.
 
 Note: the console command is `sensibo`. `sensibo-cli` is the PyPI dist name.
 
 Safety
 ------
-Every write verb will be dry-run by default; --apply commits. This tool drives
+Every write verb is dry-run by default; --apply commits. This tool drives
 air conditioners in a home, so a command that acts by accident is a bug.
+Local rules enforce a minimum off-time so they cannot short-cycle a
+compressor, and a rule cannot arm without a dry-run of its current
+definition.
 
 Machine-readable output
 -----------------------
@@ -83,8 +95,9 @@ def _as_json_payload() -> dict[str, object]:
         ),
         "disclaimer": _DISCLAIMER,
         "status": (
-            "the introspection verbs and the read-only fleet verbs (devices, read) are "
-            "implemented; the AC control, collection, and automation verbs do not exist yet"
+            "all three pillars are shipped (control, collection, automation), plus the "
+            "integration surfaces: Python import, MCP (sensibo-cli[mcp] extra), and the "
+            "LAN web dashboard"
         ),
         "commands": [
             {"path": ["whoami"], "summary": "Identity probe from culture.yaml."},
@@ -97,6 +110,37 @@ def _as_json_payload() -> dict[str, object]:
             {
                 "path": ["read"],
                 "summary": "One snapshot of every current reading for a location.",
+            },
+            {
+                "path": ["set"],
+                "summary": "Control the AC: dry-run by default, --apply commits.",
+            },
+            {
+                "path": ["collect"],
+                "summary": "Poll the fleet on a cadence into the local store.",
+            },
+            {"path": ["query"], "summary": "Offline reads from the local store."},
+            {
+                "path": ["room"],
+                "summary": "Name sensing locations; flag stale sensors.",
+            },
+            {
+                "path": ["rule"],
+                "summary": "Local rules engine: dry-run before arm, hysteresis.",
+            },
+            {
+                "path": ["smartmode"],
+                "summary": "Climate React — runs in Sensibo's cloud.",
+            },
+            {"path": ["schedule"], "summary": "Cloud schedules."},
+            {"path": ["timer"], "summary": "Cloud timers."},
+            {
+                "path": ["mcp", "serve"],
+                "summary": "MCP server (needs the sensibo-cli[mcp] extra).",
+            },
+            {
+                "path": ["web"],
+                "summary": "LAN dashboard: open reads, token-gated writes.",
             },
         ],
         "exit_codes": {

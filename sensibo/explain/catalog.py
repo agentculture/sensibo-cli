@@ -22,10 +22,16 @@ project is not affiliated with, endorsed by, or supported by them.
 
 The console command is `sensibo`. `sensibo-cli` is the PyPI dist name.
 
-## Status: scaffold
+## Status: all three pillars shipped
 
-Only the introspection verbs below are implemented. The AC control, collection,
-and automation verbs do not exist yet.
+Control: `devices`, `read`, `set`. Collection: `collect` (cadence polling +
+best-effort backfill), `query` (offline reads), `room` (operator-chosen names
+per sensing location). Automation: `rule` (local engine — cross-room
+conditions, hysteresis, arm-requires-dry-run) plus `smartmode` / `schedule` /
+`timer` (Sensibo's cloud engine — survives the local daemon sleeping).
+Integration: `import sensibo` (docs/api.md), `mcp serve` (optional
+`sensibo-cli[mcp]` extra), and `web` (LAN dashboard: open reads, token-gated
+writes). Run `sensibo explain <verb>` for any of them.
 
 ## "Locally"
 

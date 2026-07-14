@@ -32,8 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from sensibo.api import ApiError
-from sensibo.cli._apierrors import from_api_error
-from sensibo.cli._commands._client import build_client
+from sensibo.cli._commands._client import build_client, from_api_error
 from sensibo.cli._commands.overview import emit_overview
 from sensibo.cli._errors import EXIT_USER_ERROR, CliError
 from sensibo.cli._output import emit_diagnostic, emit_result

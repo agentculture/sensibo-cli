@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 
 from sensibo.api import ApiError, SensiboClient
-from sensibo.cli._apierrors import from_api_error
 from sensibo.cli._commands._automation import (
     build_payload,
     make_overview_command,
@@ -35,6 +34,7 @@ from sensibo.cli._commands._automation import (
     render_read_text,
     render_write_text,
 )
+from sensibo.cli._commands._client import from_api_error
 from sensibo.cli._errors import EXIT_USER_ERROR, CliError
 from sensibo.cli._output import emit_result
 

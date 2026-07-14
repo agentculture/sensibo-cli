@@ -14,7 +14,7 @@ import pytest
 import sensibo.cli._commands.smartmode as smartmode_module
 from sensibo.api import HttpError, MissingApiKeyError
 from sensibo.cli import main
-from sensibo.cli._apierrors import from_api_error
+from sensibo.cli._commands._client import from_api_error
 from sensibo.cli._errors import EXIT_ENV_ERROR, CliError
 
 

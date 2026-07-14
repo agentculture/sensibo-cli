@@ -36,14 +36,17 @@ def _exit_code(err: ApiError) -> int:
     return EXIT_ENV_ERROR
 
 
+def from_api_error(err: ApiError) -> CliError:
+    """Translate one :class:`ApiError` into the equivalent :class:`CliError`."""
+    return CliError(code=_exit_code(err), message=err.message, remediation=err.remediation)
+
+
 def call(fn: Callable[[], _T]) -> _T:
     """Invoke ``fn``, translating any :class:`ApiError` into a :class:`CliError`."""
     try:
         return fn()
     except ApiError as err:
-        raise CliError(
-            code=_exit_code(err), message=err.message, remediation=err.remediation
-        ) from err
+        raise from_api_error(err) from err
 
 
 def build_client() -> SensiboClient:
