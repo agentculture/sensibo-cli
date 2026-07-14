@@ -42,17 +42,15 @@ rest, not a transport that avoids the internet.
 
 ## Safety
 
-Every write verb will be dry-run by default; `--apply` commits. This tool drives
-air conditioners in a home, so a command that acts by accident is a bug.
+Every write verb is dry-run by default; `--apply` commits. This tool drives
+air conditioners in a home, so a command that acts by accident is a bug. Local
+rules enforce a minimum off-time so they cannot short-cycle a compressor, and
+a rule cannot arm without a dry-run of its current definition.
 
 ## Verbs
 
-- `sensibo whoami` — identity probe from `culture.yaml`.
-- `sensibo learn` — structured self-teaching prompt.
-- `sensibo explain <path>` — markdown docs for any noun/verb.
-- `sensibo overview` — descriptive snapshot of the agent.
-- `sensibo doctor` — check the agent-identity invariants.
-- `sensibo cli overview` — describe the CLI surface.
+Run `sensibo learn` for the full command map (derived from this catalog, so it
+cannot drift), or `sensibo explain <verb>` for any single verb's detail.
 
 ## Exit-code policy
 
