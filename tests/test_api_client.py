@@ -502,17 +502,17 @@ def test_timer_endpoints_use_a_trailing_slash(monkeypatch: pytest.MonkeyPatch) -
     client = _make_client(monkeypatch, fake)
 
     client.get_timer("pod1")
-    assert _split(fake.calls[-1].full_url)[0] == "/api/v2/pods/pod1/timer/"
+    assert _split(fake.calls[-1].full_url)[0] == "/api/v1/pods/pod1/timer/"
     assert fake.calls[-1].get_method() == "GET"
 
     client.put_timer("pod1", {"minutesFromNow": 60})
-    assert _split(fake.calls[-1].full_url)[0] == "/api/v2/pods/pod1/timer/"
+    assert _split(fake.calls[-1].full_url)[0] == "/api/v1/pods/pod1/timer/"
     assert fake.calls[-1].get_method() == "PUT"
     assert json.loads(fake.calls[-1].data.decode("utf-8")) == {"minutesFromNow": 60}
 
     fake.response = _FakeResponse(b"")
     client.delete_timer("pod1")
-    assert _split(fake.calls[-1].full_url)[0] == "/api/v2/pods/pod1/timer/"
+    assert _split(fake.calls[-1].full_url)[0] == "/api/v1/pods/pod1/timer/"
     assert fake.calls[-1].get_method() == "DELETE"
 
 
@@ -521,12 +521,12 @@ def test_schedules_endpoints_use_a_trailing_slash(monkeypatch: pytest.MonkeyPatc
     client = _make_client(monkeypatch, fake)
 
     client.get_schedules("pod1")
-    assert _split(fake.calls[-1].full_url)[0] == "/api/v2/pods/pod1/schedules/"
+    assert _split(fake.calls[-1].full_url)[0] == "/api/v1/pods/pod1/schedules/"
     assert fake.calls[-1].get_method() == "GET"
 
     body = {"targetTemperature": 22}
     client.post_schedules("pod1", body)
-    assert _split(fake.calls[-1].full_url)[0] == "/api/v2/pods/pod1/schedules/"
+    assert _split(fake.calls[-1].full_url)[0] == "/api/v1/pods/pod1/schedules/"
     assert fake.calls[-1].get_method() == "POST"
     assert json.loads(fake.calls[-1].data.decode("utf-8")) == body
 
@@ -538,7 +538,7 @@ def test_delete_schedule_uses_the_per_schedule_trailing_slash_path(
     client = _make_client(monkeypatch, fake)
 
     assert client.delete_schedule("pod1", "sched1") is None
-    assert _split(fake.calls[-1].full_url)[0] == "/api/v2/pods/pod1/schedules/sched1/"
+    assert _split(fake.calls[-1].full_url)[0] == "/api/v1/pods/pod1/schedules/sched1/"
     assert fake.calls[-1].get_method() == "DELETE"
 
 

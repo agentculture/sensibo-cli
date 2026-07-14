@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import argparse
 
-from sensibo.api import ApiError, SensiboClient
+from sensibo.api import ApiError, HttpError, SensiboClient
 from sensibo.cli._commands._automation import (
     build_payload,
     make_overview_command,
@@ -84,6 +84,14 @@ def cmd_show(args: argparse.Namespace) -> int:
     client = _client()
     try:
         current = client.get_timer(args.pod)
+    except HttpError as err:
+        # A pod with no timer set answers an application-level 404 ("This pod
+        # does not have a timer" — confirmed against the real fleet). That is
+        # a normal state, not an error.
+        if err.status == 404:
+            current = {"status": "success", "result": None, "note": "no timer set"}
+        else:
+            raise from_api_error(err) from err
     except ApiError as err:
         raise from_api_error(err) from err
 

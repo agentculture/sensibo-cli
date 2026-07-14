@@ -93,15 +93,19 @@ Relative to `/api/v2`:
 | `/pods/{id}/acStates` | GET, POST | **The control surface.** GET takes `limit` (max 20). POST body is `{"acState": {...}}`. |
 | `/pods/{id}/acStates/{property}` | PATCH | Change **one** property: `{"currentAcState": {...}, "newValue": ...}`. The safe way to toggle a single field. |
 | `/pods/{id}/smartmode` | GET, PUT, POST | Climate React — Sensibo's own server-side threshold automation. |
-| `/pods/{id}/timer/` | GET, PUT, DELETE | **Note the trailing slash.** |
-| `/pods/{id}/schedules/` | GET, POST | Trailing slash. Per-schedule ops at `/schedules/{schedule_id}/`. |
+| `/pods/{id}/timer/` | GET, PUT, DELETE | **Note the trailing slash. Lives under `/api/v1` (CONFIRMED)** — see below. |
+| `/pods/{id}/schedules/` | GET, POST | Trailing slash. **Lives under `/api/v1` (CONFIRMED)** — see below. Per-schedule ops at `/schedules/{schedule_id}/`. |
 | `/pods/{id}/events` | GET | Device events, with a documented event-code taxonomy. |
 | `/pods/{id}/measurements` | GET | ⚠️ **Undocumented.** Absent from the current OpenAPI spec, but present in Sensibo's *own* official Python SDK. It works, but **don't build on it** — see below. |
 
-**Known inconsistency (UNVERIFIED which is canonical):** the OpenAPI spec places
-`timer/` and `schedules/` under **v2**, but `pysensibo` calls them on **v1** and
-Home Assistant ships that in production. Both appear to work. Prefer the
-documented v2 path; be ready to fall back.
+**Resolved (CONFIRMED against the real fleet 2026-07-14):** `timer/` and
+`schedules/` live under **v1**, not v2 — the OpenAPI spec's v2 placement is
+wrong. Probed: both v2 routes return *server-level* HTML 404s; `GET
+/api/v1/pods/{id}/schedules/` returns 200 with real data, and `GET
+/api/v1/pods/{id}/timer/` returns an *application-level* 404 ("This pod does
+not have a timer") when no timer is set — a normal state, not an error.
+`pysensibo`/Home Assistant were right. The client routes these five calls
+through v1.
 
 Several further endpoints (`cleanFiltersNotification`, `calibration/`,
 `pureboost`) are undocumented but used in production by HA. They work; treat them

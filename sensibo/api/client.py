@@ -33,6 +33,7 @@ import gzip
 import io
 import json
 import random
+import re
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -80,6 +81,10 @@ def _desensitize_http_error(err: HTTPError) -> None:
 def _read_error_body(err: HTTPError) -> str:
     try:
         raw = err.read()
+        # Error responses honor Accept-Encoding too — decompress before
+        # decoding or the diagnostic is gzip bytes (caught on a real 404).
+        if err.headers.get("Content-Encoding") == "gzip":
+            raw = gzip.GzipFile(fileobj=io.BytesIO(raw)).read()
     except Exception:  # noqa: BLE001 - best-effort diagnostic only, never fatal
         return ""
     if not raw:
@@ -132,10 +137,18 @@ class SensiboClient:
 
     # -- low-level request -----------------------------------------------
 
-    def _build_url(self, path: str, params: dict[str, object] | None) -> str:
+    def _build_url(
+        self, path: str, params: dict[str, object] | None, api_version: str | None = None
+    ) -> str:
         query: dict[str, object] = dict(params or {})
         query["apiKey"] = self._api_key
-        return f"{self._base_url}{path}?{urlencode(query)}"
+        base = self._base_url
+        if api_version is not None:
+            # timer/ and schedules/ live under v1 in production (CONFIRMED
+            # against the real fleet 2026-07-14: the v2 routes are server-level
+            # 404s) — the OpenAPI spec's v2 placement is wrong.
+            base = re.sub(r"/v\d+$", f"/{api_version}", base)
+        return f"{base}{path}?{urlencode(query)}"
 
     def request(
         self,
@@ -143,6 +156,7 @@ class SensiboClient:
         path: str,
         params: dict[str, object] | None = None,
         json_body: dict[str, object] | None = None,
+        api_version: str | None = None,
     ) -> object:
         """Issue one HTTP request and return the parsed JSON body (or ``None``).
 
@@ -152,7 +166,7 @@ class SensiboClient:
         client-side minimum interval is enforced once per call, before the
         first attempt.
         """
-        url = self._build_url(path, params)
+        url = self._build_url(path, params, api_version)
         data = None
         headers = {"Accept-Encoding": "gzip"}
         if json_body is not None:
@@ -316,25 +330,25 @@ class SensiboClient:
 
     def get_timer(self, pod_id: str) -> object:
         """``GET /pods/{id}/timer/``"""
-        return self.request("GET", f"/pods/{pod_id}/timer/")
+        return self.request("GET", f"/pods/{pod_id}/timer/", api_version="v1")
 
     def put_timer(self, pod_id: str, body: dict[str, object]) -> object:
         """``PUT /pods/{id}/timer/``"""
-        return self.request("PUT", f"/pods/{pod_id}/timer/", json_body=body)
+        return self.request("PUT", f"/pods/{pod_id}/timer/", json_body=body, api_version="v1")
 
     def delete_timer(self, pod_id: str) -> object:
         """``DELETE /pods/{id}/timer/``"""
-        return self.request("DELETE", f"/pods/{pod_id}/timer/")
+        return self.request("DELETE", f"/pods/{pod_id}/timer/", api_version="v1")
 
     # -- schedules (note: trailing slash) ------------------------------------
 
     def get_schedules(self, pod_id: str) -> object:
         """``GET /pods/{id}/schedules/``"""
-        return self.request("GET", f"/pods/{pod_id}/schedules/")
+        return self.request("GET", f"/pods/{pod_id}/schedules/", api_version="v1")
 
     def post_schedules(self, pod_id: str, body: dict[str, object]) -> object:
         """``POST /pods/{id}/schedules/``"""
-        return self.request("POST", f"/pods/{pod_id}/schedules/", json_body=body)
+        return self.request("POST", f"/pods/{pod_id}/schedules/", json_body=body, api_version="v1")
 
     def delete_schedule(self, pod_id: str, schedule_id: str) -> object:
         """``DELETE /pods/{id}/schedules/{schedule_id}/``
@@ -342,7 +356,7 @@ class SensiboClient:
         Per-schedule op, trailing slash (``docs/sensibo-api.md``, Endpoints
         table: "Per-schedule ops at ``/schedules/{schedule_id}/``").
         """
-        return self.request("DELETE", f"/pods/{pod_id}/schedules/{schedule_id}/")
+        return self.request("DELETE", f"/pods/{pod_id}/schedules/{schedule_id}/", api_version="v1")
 
     # -- events ----------------------------------------------------------------
 
