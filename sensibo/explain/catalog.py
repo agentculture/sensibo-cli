@@ -1,4 +1,4 @@
-"""Markdown catalog for ``sensibo-cli explain <path>``.
+"""Markdown catalog for ``sensibo explain <path>``.
 
 Each entry is verbatim markdown. Keys are command-path tuples. The empty tuple
 and ``("sensibo-cli",)`` both resolve to the root entry.
@@ -12,20 +12,41 @@ from __future__ import annotations
 _ROOT = """\
 # sensibo-cli
 
-A clonable template for AgentCulture mesh agents. It carries an agent-first CLI
-(cited from the teken `python-cli` reference), a mesh identity (`culture.yaml` +
-`CLAUDE.md`), the canonical guildmaster skill kit under `.claude/skills/`, and a
-buildable/deployable package baseline. Clone it, rename the package, edit
-`culture.yaml`, and you have a new agent.
+Agent and CLI for Sensibo smart-AC control at home. Three pillars: control the
+AC (power, mode, target temperature, fan, swing); collect every sensor reading
+into a local store you own and can query offline; and automate conditions that
+drive the AC (thresholds, schedules, occupancy, cross-room logic).
+
+**Unofficial community tool.** Sensibo is a trademark of Sensibo Ltd; this
+project is not affiliated with, endorsed by, or supported by them.
+
+The console command is `sensibo`. `sensibo-cli` is the PyPI dist name.
+
+## Status: scaffold
+
+Only the introspection verbs below are implemented. The AC control, collection,
+and automation verbs do not exist yet.
+
+## "Locally"
+
+Sensibo devices are cloud-only — there is no LAN-local API, no local REST
+endpoint, and no MQTT on stock firmware. Readings are polled from Sensibo's
+cloud and persisted on your machine. "Locally" describes where the data comes to
+rest, not a transport that avoids the internet.
+
+## Safety
+
+Every write verb will be dry-run by default; `--apply` commits. This tool drives
+air conditioners in a home, so a command that acts by accident is a bug.
 
 ## Verbs
 
-- `sensibo-cli whoami` — identity probe from `culture.yaml`.
-- `sensibo-cli learn` — structured self-teaching prompt.
-- `sensibo-cli explain <path>` — markdown docs for any noun/verb.
-- `sensibo-cli overview` — descriptive snapshot of the agent.
-- `sensibo-cli doctor` — check the agent-identity invariants.
-- `sensibo-cli cli overview` — describe the CLI surface.
+- `sensibo whoami` — identity probe from `culture.yaml`.
+- `sensibo learn` — structured self-teaching prompt.
+- `sensibo explain <path>` — markdown docs for any noun/verb.
+- `sensibo overview` — descriptive snapshot of the agent.
+- `sensibo doctor` — check the agent-identity invariants.
+- `sensibo cli overview` — describe the CLI surface.
 
 ## Exit-code policy
 
@@ -36,62 +57,62 @@ buildable/deployable package baseline. Clone it, rename the package, edit
 
 ## See also
 
-- `sensibo-cli explain whoami`
-- `sensibo-cli explain doctor`
+- `sensibo explain whoami`
+- `sensibo explain doctor`
 """
 
 _WHOAMI = """\
-# sensibo-cli whoami
+# sensibo whoami
 
 Reports the agent's identity from `culture.yaml`: nick (`suffix`), backend,
 served model, and the package version. Read-only.
 
 ## Usage
 
-    sensibo-cli whoami
-    sensibo-cli whoami --json
+    sensibo whoami
+    sensibo whoami --json
 """
 
 _LEARN = """\
-# sensibo-cli learn
+# sensibo learn
 
 Prints a structured self-teaching prompt covering purpose, command map,
 exit-code policy, `--json` support, and the `explain` pointer.
 
 ## Usage
 
-    sensibo-cli learn
-    sensibo-cli learn --json
+    sensibo learn
+    sensibo learn --json
 """
 
 _EXPLAIN = """\
-# sensibo-cli explain <path>
+# sensibo explain <path>
 
 Prints markdown documentation for any noun/verb path. Unlike `--help` (terse,
 positional), `explain` is global and addressable by path.
 
 ## Usage
 
-    sensibo-cli explain sensibo-cli
-    sensibo-cli explain whoami
-    sensibo-cli explain --json <path>
+    sensibo explain sensibo-cli
+    sensibo explain whoami
+    sensibo explain --json <path>
 """
 
 _OVERVIEW = """\
-# sensibo-cli overview
+# sensibo overview
 
 Read-only descriptive snapshot of the agent: identity (from `culture.yaml`), the
-verb surface, and the sibling-pattern artifacts the template carries. Accepts an
+verb surface, and the sibling-pattern artifacts this repo carries. Accepts an
 ignored `target` so a stray path never hard-fails.
 
 ## Usage
 
-    sensibo-cli overview
-    sensibo-cli overview --json
+    sensibo overview
+    sensibo overview --json
 """
 
 _DOCTOR = """\
-# sensibo-cli doctor
+# sensibo doctor
 
 Checks the agent-identity invariants `steward doctor` verifies:
 prompt-file-present and backend-consistency (`colleague` → `AGENTS.colleague.md`), plus a
@@ -99,20 +120,20 @@ skills-present check. Exits 1 when unhealthy.
 
 ## Usage
 
-    sensibo-cli doctor
-    sensibo-cli doctor --json
+    sensibo doctor
+    sensibo doctor --json
 """
 
 _CLI = """\
-# sensibo-cli cli
+# sensibo cli
 
 Noun group for CLI-surface introspection. `cli overview` describes the CLI
 itself (distinct from the global `overview`, which describes the agent).
 
 ## Usage
 
-    sensibo-cli cli overview
-    sensibo-cli cli overview --json
+    sensibo cli overview
+    sensibo cli overview --json
 """
 
 

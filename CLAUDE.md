@@ -20,8 +20,7 @@ Three pillars, in build order:
 **Current state: the repo is a scaffold.** The CLI ships only the agent-first
 introspection verbs (`whoami`, `learn`, `explain`, `overview`, `doctor`, `cli
 overview`) inherited from `culture-agent-template`. None of the three pillars
-exist yet. Several self-description strings in `sensibo/` still describe the
-template rather than this agent — see [Known drift](#known-drift).
+exist yet.
 
 ## Commands
 
@@ -155,13 +154,28 @@ poll faster than ~60s.
 Sensor sets differ per model — design the collector around "whatever fields this
 pod reports", never a hardcoded schema.
 
-## Known drift
+## Naming: three names, and they don't match
 
-Tracked, not yet fixed — do not treat these strings as accurate:
+| | |
+|---|---|
+| PyPI dist / agent nick (`culture.yaml` suffix) | `sensibo-cli` |
+| import package | `sensibo` |
+| **console command** | **`sensibo`** |
 
-- `learn.py`, `explain/catalog.py`, `overview.py`, and the parser `description=`
-  in `cli/__init__.py` still describe `sensibo-cli` as "a clonable template for
-  AgentCulture mesh agents". They must be rewritten to describe the AC agent as
-  the real verbs land.
-- `README.md` previously documented the console script as `sensibo-cli`; the
-  actual entry point is `sensibo`.
+The rule, and it's load-bearing: **anything that names a command the user types
+must say `sensibo`** — argparse `prog`, `usage:` output, `hint:` remediations,
+every example in `learn` and the `explain` catalog. Naming the dist there tells
+people to run `sensibo-cli --help`, which pip never installs. Tests
+`test_usage_names_the_installed_command` and
+`test_parse_error_hint_names_the_installed_command` guard this.
+
+**Anything naming the agent or the project** — `whoami`'s nick, the global
+`overview` subject, the `explain` root title — correctly stays `sensibo-cli`.
+
+## `learn` must carry the trademark disclaimer
+
+The unofficial-tool / trademark disclaimer is required in **both** the README and
+`learn` output (text and `--json`), not just the README. Guarded by
+`test_learn_carries_the_trademark_disclaimer`. Keep `learn`, `explain`, and
+`overview` accurate as verbs land — they are the agent-facing docs, and a stale
+one is a lie the next agent will act on.

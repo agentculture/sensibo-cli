@@ -69,9 +69,17 @@ def _build_parser() -> argparse.ArgumentParser:
     from sensibo.cli._commands import overview as _overview_cmd
     from sensibo.cli._commands import whoami as _whoami_cmd
 
+    # prog is the *console command* (`sensibo`), not the dist name (`sensibo-cli`).
+    # argparse uses it for `usage:` and for the remediation hints in
+    # _CliArgumentParser.error() — naming the dist here would tell users to run a
+    # command that isn't installed.
     parser = _CliArgumentParser(
-        prog="sensibo-cli",
-        description="sensibo-cli — a clonable template for AgentCulture mesh agents.",
+        prog="sensibo",
+        description=(
+            "sensibo — control Sensibo smart-AC devices, collect their sensor "
+            "readings into a local store, and automate conditions that drive the AC. "
+            "Unofficial community tool; Sensibo is a trademark of Sensibo Ltd."
+        ),
     )
     parser.add_argument(
         "--version",

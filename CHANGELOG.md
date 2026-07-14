@@ -7,8 +7,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.5.0] - 2026-07-14
 
-Docs-only release. No runtime code changed — `sensibo/` is untouched, and the CLI
-still ships only its introspection verbs.
+Documentation release, plus the CLI self-description fixes that documenting the
+real command surface exposed. No new verbs — the CLI still ships only its
+introspection verbs, and no Sensibo API client exists yet.
 
 ### Added
 
@@ -64,6 +65,25 @@ still ships only its introspection verbs.
 - **`README.md` documented the console script as `sensibo-cli`.** The actual entry
   point is **`sensibo`** (`sensibo-cli` is the PyPI dist name; `sensibo` is both
   the import package and the command). Every quickstart line was wrong.
+- **The CLI told users to run a command that isn't installed.** argparse `prog`
+  was `sensibo-cli`, so `sensibo --help` printed `usage: sensibo-cli …` and every
+  parse-error remediation said `run 'sensibo-cli --help'` — a command pip never
+  installs. `prog` is now `sensibo`, and the `explain` catalog, `learn`, `doctor`,
+  and `cli overview` name the console command in every example. The agent/project
+  name (`whoami`'s nick, the global `overview` subject, the `explain` root title)
+  correctly remains `sensibo-cli`. Two regression tests pin the distinction.
+  Surfaced by qodo on
+  [#2](https://github.com/agentculture/sensibo-cli/pull/2).
+- **`learn` output omitted the mandated trademark disclaimer.** The brief requires
+  the unofficial-tool / Sensibo-trademark disclaimer in *both* the README and
+  `learn`; it was only in the README. Now in `learn` text and in `learn --json`
+  (a `disclaimer` field), with a test pinning it.
+- **The CLI still described itself as "a clonable template for AgentCulture mesh
+  agents"** in `learn`, `overview`, the `explain` catalog, and the parser
+  description — inherited from `culture-agent-template` and inaccurate the moment
+  this became an AC agent. All now describe the real tool, including the
+  cloud-only/"locally" clarification and the dry-run-by-default safety note.
+  `learn --json` gains `dist` and `status` fields.
 
 ## [0.4.0] - 2026-06-23
 

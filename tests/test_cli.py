@@ -21,7 +21,7 @@ def test_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
 def test_no_args_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([])
     assert rc == 0
-    assert "usage: sensibo-cli" in capsys.readouterr().out
+    assert "usage: sensibo" in capsys.readouterr().out
 
 
 def test_unknown_command_errors(capsys: pytest.CaptureFixture[str]) -> None:
@@ -72,7 +72,9 @@ def test_learn_json(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["learn", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["tool"] == "sensibo-cli"
+    assert payload["tool"] == "sensibo"
+    assert payload["dist"] == "sensibo-cli"
+    assert "trademark of Sensibo Ltd" in payload["disclaimer"]
     assert payload["version"] == __version__
     assert payload["json_support"] is True
 
@@ -97,7 +99,7 @@ def test_explain_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["path"] == ["whoami"]
-    assert "sensibo-cli whoami" in payload["markdown"]
+    assert "sensibo whoami" in payload["markdown"]
 
 
 def test_explain_unknown_path_errors(capsys: pytest.CaptureFixture[str]) -> None:
@@ -113,3 +115,43 @@ def test_every_catalog_path_resolves(capsys: pytest.CaptureFixture[str]) -> None
         rc = main(["explain", *path])
         assert rc == 0, f"explain {' '.join(path)} failed"
         capsys.readouterr()
+
+
+# --- naming: the console command is `sensibo`, the dist is `sensibo-cli` ---
+
+
+def test_usage_names_the_installed_command(capsys: pytest.CaptureFixture[str]) -> None:
+    """argparse `prog` must be the console command, not the dist name.
+
+    Regression guard: `prog="sensibo-cli"` made `--help` print
+    `usage: sensibo-cli ...` and made parse-error remediations tell the user to
+    run `sensibo-cli --help` — a command that pip never installs. The entry
+    point in pyproject.toml is `sensibo`.
+    """
+    main([])
+    out = capsys.readouterr().out
+    assert "usage: sensibo " in out or out.startswith("usage: sensibo\n")
+    assert "usage: sensibo-cli" not in out
+
+
+def test_parse_error_hint_names_the_installed_command(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit):
+        main(["bogus"])
+    err = capsys.readouterr().err
+    assert "hint:" in err
+    assert "sensibo-cli --help" not in err
+
+
+def test_learn_carries_the_trademark_disclaimer(capsys: pytest.CaptureFixture[str]) -> None:
+    """The unofficial-tool disclaimer is required in `learn` output, not just the README."""
+    main(["learn"])
+    out = capsys.readouterr().out
+    assert "Unofficial community tool" in out
+    assert "trademark of Sensibo Ltd" in out
+
+
+def test_learn_does_not_claim_to_be_a_template(capsys: pytest.CaptureFixture[str]) -> None:
+    main(["learn"])
+    assert "clonable template" not in capsys.readouterr().out

@@ -1,4 +1,4 @@
-"""``sensibo-cli doctor`` — check the agent-identity invariants.
+"""``sensibo doctor`` — check the agent-identity invariants.
 
 Mirrors the two invariants ``steward doctor`` verifies for a mesh agent:
 
@@ -105,7 +105,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         emit_result(report, json_mode=True)
     else:
         status = "healthy" if report["healthy"] else "unhealthy"
-        lines = [f"sensibo-cli doctor: {status}", ""]
+        lines = [f"sensibo doctor: {status}", ""]
         for check in report["checks"]:
             mark = "ok" if check["passed"] else "FAIL"
             lines.append(f"[{mark}] {check['id']}: {check['message']}")

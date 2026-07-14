@@ -1,7 +1,7 @@
-"""``sensibo-cli overview`` — read-only descriptive snapshot of the agent.
+"""``sensibo overview`` — read-only descriptive snapshot of the agent.
 
 Describes the agent to an agent reader: identity (from culture.yaml), the verb
-surface, and the sibling-pattern artifacts this template carries. The shared
+surface, and the sibling-pattern artifacts this repo carries. The shared
 section/render helpers here are reused by the ``cli`` noun's ``overview`` (see
 :mod:`sensibo.cli._commands.cli`).
 

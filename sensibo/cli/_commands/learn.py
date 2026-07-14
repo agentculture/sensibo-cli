@@ -1,4 +1,4 @@
-"""``sensibo-cli learn`` — the learnability affordance.
+"""``sensibo learn`` — the learnability affordance.
 
 Prints a structured self-teaching prompt. Must satisfy the agent-first rubric:
 >=200 chars and mention purpose, command map, exit codes, --json, and explain.
@@ -11,29 +11,49 @@ import argparse
 from sensibo import __version__
 from sensibo.cli._output import emit_result
 
-_TEXT = """\
-sensibo-cli — a clonable template for AgentCulture mesh agents.
+_DISCLAIMER = (
+    "Unofficial community tool. Sensibo is a trademark of Sensibo Ltd; this "
+    "project is not affiliated with, endorsed by, or supported by them."
+)
+
+_TEXT = f"""\
+sensibo — control Sensibo smart-AC devices from the command line.
+
+{_DISCLAIMER}
 
 Purpose
 -------
-Scaffold for a new Culture mesh agent: an agent-first CLI (cited from the teken
-`python-cli` reference), an identity (culture.yaml + CLAUDE.md), the canonical
-guildmaster skill kit under .claude/skills/, and a deploy/CI baseline. Clone it,
-rename the package, and edit culture.yaml to mint a new agent.
+Three pillars: control the AC (power, mode, target, fan, swing); collect every
+sensor reading into a local store you own and can query offline; and automate
+conditions that drive the AC (thresholds, schedules, occupancy, cross-room).
+
+Sensibo devices are cloud-only — there is no LAN-local API — so readings are
+polled from Sensibo's cloud and persisted locally. "Locally" means the data
+comes to rest on your machine, not that the transport avoids the internet.
+
+STATUS: scaffold. Only the introspection verbs below exist today. The AC
+control, collection, and automation verbs are not implemented yet.
 
 Commands
 --------
-  sensibo-cli whoami             Identity from culture.yaml.
-  sensibo-cli learn              This self-teaching prompt.
-  sensibo-cli explain <path>...  Markdown docs for any noun/verb path.
-  sensibo-cli overview           Descriptive snapshot of the agent.
-  sensibo-cli doctor             Check the agent-identity invariants.
-  sensibo-cli cli overview       Describe the CLI surface itself.
+  sensibo whoami             Identity from culture.yaml.
+  sensibo learn              This self-teaching prompt.
+  sensibo explain <path>...  Markdown docs for any noun/verb path.
+  sensibo overview           Descriptive snapshot of the agent.
+  sensibo doctor             Check the agent-identity invariants.
+  sensibo cli overview       Describe the CLI surface itself.
+
+Note: the console command is `sensibo`. `sensibo-cli` is the PyPI dist name.
+
+Safety
+------
+Every write verb will be dry-run by default; --apply commits. This tool drives
+air conditioners in a home, so a command that acts by accident is a bug.
 
 Machine-readable output
 -----------------------
 Every command supports --json. Errors in JSON mode emit
-{"code", "message", "remediation"} to stderr. Stdout and stderr never mix.
+{{"code", "message", "remediation"}} to stderr. Stdout and stderr never mix.
 
 Exit-code policy
 ----------------
@@ -44,15 +64,25 @@ Exit-code policy
 
 More detail
 -----------
-  sensibo-cli explain sensibo-cli
+  sensibo explain sensibo-cli
 """
 
 
 def _as_json_payload() -> dict[str, object]:
     return {
-        "tool": "sensibo-cli",
+        # `tool` is the command an agent invokes; `dist` is the PyPI name.
+        "tool": "sensibo",
+        "dist": "sensibo-cli",
         "version": __version__,
-        "purpose": "Clonable scaffold for a new AgentCulture mesh agent.",
+        "purpose": (
+            "Control Sensibo smart-AC devices, collect their sensor readings into a "
+            "local store, and automate conditions that drive the AC."
+        ),
+        "disclaimer": _DISCLAIMER,
+        "status": (
+            "scaffold — only the introspection verbs below are implemented; the AC "
+            "control, collection, and automation verbs do not exist yet"
+        ),
         "commands": [
             {"path": ["whoami"], "summary": "Identity probe from culture.yaml."},
             {"path": ["learn"], "summary": "Self-teaching prompt."},
@@ -67,7 +97,7 @@ def _as_json_payload() -> dict[str, object]:
             "2": "environment/setup error",
         },
         "json_support": True,
-        "explain_pointer": "sensibo-cli explain <path>",
+        "explain_pointer": "sensibo explain <path>",
     }
 
 
