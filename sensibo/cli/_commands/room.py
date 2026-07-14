@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import datetime
 
+from sensibo.cli._commands._automation import JSON_HELP
 from sensibo.cli._commands.overview import emit_overview
 from sensibo.cli._errors import EXIT_USER_ERROR, CliError
 from sensibo.cli._output import emit_result
@@ -210,14 +211,14 @@ def register(sub: argparse._SubParsersAction) -> None:
         "room",
         help="The room naming registry (see 'sensibo room overview').",
     )
-    p.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    p.add_argument("--json", action="store_true", help=JSON_HELP)
     p.set_defaults(func=_no_verb, json=False)
     # Propagate the structured-error parser class so every sub-verb's parse
     # errors route through the CliError contract, not argparse's default.
     noun_sub = p.add_subparsers(dest="room_command", parser_class=type(p))
 
     ov = noun_sub.add_parser("overview", help="Describe the room naming registry.")
-    ov.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    ov.add_argument("--json", action="store_true", help=JSON_HELP)
     ov.set_defaults(func=cmd_room_overview)
 
     ls = noun_sub.add_parser("list", help="List every known sensing location, flagging stale ones.")
@@ -231,7 +232,7 @@ def register(sub: argparse._SubParsersAction) -> None:
             f"(default: {DEFAULT_STALE_AFTER_HOURS:g})."
         ),
     )
-    ls.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    ls.add_argument("--json", action="store_true", help=JSON_HELP)
     ls.set_defaults(func=cmd_room_list)
 
     nm = noun_sub.add_parser(
@@ -245,5 +246,5 @@ def register(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Persist the rename (default: print a dry-run preview and change nothing).",
     )
-    nm.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    nm.add_argument("--json", action="store_true", help=JSON_HELP)
     nm.set_defaults(func=cmd_room_name)

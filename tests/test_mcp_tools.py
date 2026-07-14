@@ -174,9 +174,10 @@ def test_read_location_unknown_id_raises_lookup_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _install(monkeypatch, _FakeFleetClient())
+    db = str(tmp_path / "sensibo.db")
 
     with pytest.raises(LookupError, match="no-such-id"):
-        tools.read_location("no-such-id", db=str(tmp_path / "sensibo.db"))
+        tools.read_location("no-such-id", db=db)
 
 
 def test_read_location_maps_api_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -185,9 +186,10 @@ def test_read_location_maps_api_error(monkeypatch: pytest.MonkeyPatch, tmp_path:
             raise HttpError(message="HTTP 500", status=500, remediation="try later")
 
     _install(monkeypatch, _BrokenClient())
+    db = str(tmp_path / "sensibo.db")
 
     with pytest.raises(RuntimeError, match="HTTP 500"):
-        tools.read_location(POD_ID, db=str(tmp_path / "sensibo.db"))
+        tools.read_location(POD_ID, db=db)
 
 
 # --- query_history: local store only, no client needed ----------------------
@@ -242,9 +244,10 @@ def test_query_history_range_is_inclusive(tmp_path: Path) -> None:
 def test_query_history_range_requires_field(tmp_path: Path) -> None:
     db_path = tmp_path / "sensibo.db"
     _seed_history(db_path)
+    db = str(db_path)
 
     with pytest.raises(ValueError, match="field"):
-        tools.query_history(POD_ID, mode="range", db=str(db_path))
+        tools.query_history(POD_ID, mode="range", db=db)
 
 
 def test_query_history_resolves_by_alias(tmp_path: Path) -> None:
@@ -261,26 +264,29 @@ def test_query_history_resolves_by_alias(tmp_path: Path) -> None:
 def test_query_history_unknown_location_raises_lookup_error(tmp_path: Path) -> None:
     db_path = tmp_path / "sensibo.db"
     _seed_history(db_path)
+    db = str(db_path)
 
     with pytest.raises(LookupError):
-        tools.query_history("no-such-location", db=str(db_path))
+        tools.query_history("no-such-location", db=db)
 
 
 def test_query_history_invalid_mode_raises_value_error(tmp_path: Path) -> None:
     db_path = tmp_path / "sensibo.db"
     _seed_history(db_path)
+    db = str(db_path)
 
     with pytest.raises(ValueError, match="mode"):
-        tools.query_history(POD_ID, mode="bogus", db=str(db_path))
+        tools.query_history(POD_ID, mode="bogus", db=db)
 
 
 def test_query_history_invalid_timestamp_raises_value_error(tmp_path: Path) -> None:
     db_path = tmp_path / "sensibo.db"
     _seed_history(db_path)
+    db = str(db_path)
 
     with pytest.raises(ValueError, match="since"):
         tools.query_history(
-            POD_ID, field="temperature", mode="range", since="not-a-timestamp", db=str(db_path)
+            POD_ID, field="temperature", mode="range", since="not-a-timestamp", db=db
         )
 
 

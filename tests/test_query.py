@@ -300,9 +300,10 @@ def test_range_requires_field_flag(
 ) -> None:
     db = tmp_path / "sensibo.db"
     _seed_two_locations(db)
+    args = ["query", "range", "pod-1", "--db", str(db)]
 
     with pytest.raises(SystemExit) as exc:
-        main(["query", "range", "pod-1", "--db", str(db)])
+        main(args)
     assert exc.value.code == 1
     err = capsys.readouterr().err
     assert err.startswith("error:")
