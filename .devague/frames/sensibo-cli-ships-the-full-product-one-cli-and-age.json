@@ -1,0 +1,409 @@
+{
+  "slug": "sensibo-cli-ships-the-full-product-one-cli-and-age",
+  "title": "sensibo-cli ships the full product: one CLI and agent fully controls every Sensibo AC at home, every sensor reading lands in a local time-series store with two years of history, automated conditions drive the AC, and bigger apps connect through a Python import, an MCP server, and a website on the home network.",
+  "schema_version": 2,
+  "status": "exported",
+  "created": "2026-07-14T15:04:14Z",
+  "updated": "2026-07-14T15:16:12Z",
+  "claims": [
+    {
+      "id": "c1",
+      "kind": "announcement",
+      "text": "sensibo-cli ships the full product: one CLI and agent fully controls every Sensibo AC at home, every sensor reading lands in a local time-series store with two years of history, automated conditions drive the AC, and bigger apps connect through a Python import, an MCP server, and a website on the home network.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h11",
+          "text": "Every pillar named in the announcement is demonstrable end-to-end against the real fleet - none of it mocked.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "The README quickstart walks all pillars in order and every verb it names exists; learn/explain/overview stay accurate as verbs land."
+    },
+    {
+      "id": "c2",
+      "kind": "audience",
+      "text": "The home operator and the AI agents acting for them: Claude Code and mesh agents driving the CLI in loops, MCP clients, Python importers, and household members using the LAN website.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h13",
+          "text": "Every named audience exercises its surface in acceptance: an agent drives the CLI with --json, an MCP client connects, a script imports the package, a LAN browser loads the dashboard.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": ""
+    },
+    {
+      "id": "c3",
+      "kind": "before_state",
+      "text": "The repo is a scaffold: only introspection verbs ship; control happens only in the Sensibo app; sensor history lives in the Sensibo cloud behind an accessible window that is likely about 7 days.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h14",
+          "text": "The before-state is as described: at frame time the repo ships only introspection verbs, with no control, collect, or rules code.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": ""
+    },
+    {
+      "id": "c4",
+      "kind": "after_state",
+      "text": "The operator fully controls Sensibo from the CLI, sensor data is collected into a local store reaching two years of history, automated conditions drive the AC, and bigger apps connect via Python import, MCP, and a website on the network.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h12",
+          "text": "Each after-state leg (control, collection, automation, import, MCP, web) has at least one passing end-to-end demonstration recorded in the docs.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "Acceptance is the success-signal walkthrough (c20) run end-to-end on the real fleet and recorded in docs."
+    },
+    {
+      "id": "c5",
+      "kind": "why_it_matters",
+      "text": "Data the operator owns outlives the vendor window; AC control becomes scriptable by agents; automations can express what the Sensibo engine cannot: multi-room logic, air-quality-driven cooling, occupancy plus time-of-day.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h15",
+          "text": "The differentiators are real: at least one shipped rule expresses a condition Climate React cannot (cross-room motion plus temperature), and the local store answers a query offline with the cloud unreachable.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": ""
+    },
+    {
+      "id": "c6",
+      "kind": "boundary",
+      "text": "Cloud transport only: there is no LAN-local Sensibo protocol (verified). Local means where the data lives, never the wire, and no doc may imply otherwise.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h16",
+          "text": "No doc, help text, or learn output implies a LAN-local Sensibo protocol; the cloud-only finding stays in docs/sensibo-api.md with its evidence.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": ""
+    },
+    {
+      "id": "c7",
+      "kind": "boundary",
+      "text": "Unofficial community tool. Sensibo is a trademark of Sensibo Ltd; the disclaimer stays in the README and in learn output.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h17",
+          "text": "test_learn_carries_the_trademark_disclaimer stays green and the README keeps the unofficial-tool disclaimer.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": ""
+    },
+    {
+      "id": "c8",
+      "kind": "boundary",
+      "text": "Not a general home-automation platform: no non-Sensibo devices, no Home Assistant replacement. Rules read Sensibo sensors and drive Sensibo ACs only.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h18",
+          "text": "The CLI grows no verbs targeting non-Sensibo devices; rules reference Sensibo pods and their sensors only.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": ""
+    },
+    {
+      "id": "c9",
+      "kind": "requirement",
+      "text": "Full AC control: power, mode, target temperature, fan speed, swing - per device and across the whole house.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h1",
+          "text": "Verified against a real device: each control field round-trips (set, then read back), and a write without --apply changes nothing on the unit.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "Implement sensibo set <pod> --power/--mode/--target/--fan/--swing [--apply] plus an all-devices selector; POST acStates, PATCH acStates/{property} for single-field toggles; verify by set-then-read-back."
+    },
+    {
+      "id": "c10",
+      "kind": "requirement",
+      "text": "A collector polls on a cadence and persists every reading each pod reports into a local time-series store the operator can query offline.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h2",
+          "text": "No hardcoded schema: the collector stores whatever fields the pod reports, branches pm25 on productModel (AQI enum on Pure vs micrograms on Elements), and captures Room Sensor readings nested in motionSensors.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "Implement sensibo collect [--daemon]: poll GET /users/me/pods?fields=* with Accept-Encoding gzip on a cadence >=60s, upsert into SQLite, expose sensibo query for offline reads."
+    },
+    {
+      "id": "c11",
+      "kind": "requirement",
+      "text": "Sensor history reaches two years back.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h3",
+          "text": "Two years is honest: either an empirical probe shows the cloud backfill window reaches that far, or the spec explicitly redefines it as local retention of at least two years going forward plus best-effort backfill of whatever the cloud returns.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [
+        {
+          "id": "q1",
+          "text": "risk: If the accessible cloud window is really about 7 days, any collection gap (host asleep for a week) is permanently lost data - the collector needs an always-on home.",
+          "resolved": false,
+          "blocking": false
+        }
+      ],
+      "links": [],
+      "instruction": "On first run probe historicalMeasurements at days=730/90/30/7, backfill everything returned, then retain locally for at least two years; write the empirically found window into docs/sensibo-api.md."
+    },
+    {
+      "id": "c12",
+      "kind": "requirement",
+      "text": "Automated conditions drive the AC - thresholds, schedules, occupancy, multi-room logic - both by managing the server-side Climate React and schedules, and via a local rules engine.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h4",
+          "text": "Every rule states whether it runs in the Sensibo cloud (survives the laptop sleeping) or in the local daemon (does not), and no rule arms without a dry-run preview of what it would do right now.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "Ship rule verbs (list/add/dry-run/arm/disarm) for the local engine and smartmode/schedule verbs wrapping the cloud engine; every rule declares cloud or local execution in its definition and output."
+    },
+    {
+      "id": "c13",
+      "kind": "requirement",
+      "text": "Bigger apps connect via Python import: the sensibo package exposes a documented public API usable without the CLI.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h5",
+          "text": "A third-party script can import sensibo, list pods, read measurements, and set AC state without touching argparse or the console command.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "Expose a documented client class in the sensibo package (list pods, read measurements, history, set state) importable with zero CLI or argparse involvement."
+    },
+    {
+      "id": "c14",
+      "kind": "requirement",
+      "text": "Bigger apps connect via MCP: an MCP server exposes the same read and control capabilities as tools.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h6",
+          "text": "An MCP client can list devices, read sensors, and set AC state, and MCP write tools honor the same dry-run-then-apply contract as the CLI.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "Ship sensibo mcp serve over stdio with tools for list/read/history/set; write tools take an apply flag defaulting to false, mirroring the CLI contract."
+    },
+    {
+      "id": "c15",
+      "kind": "requirement",
+      "text": "Bigger apps connect via a website on the home network: live readings, history, and control from a browser on the LAN.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h7",
+          "text": "A browser on another machine on the LAN can view live readings and history charts served entirely from the local store, and control actions go through the same safety contract.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "Ship sensibo web [--bind ADDR:PORT] on stdlib http.server: pages read from SQLite only; control POSTs route through the same client and safety contract."
+    },
+    {
+      "id": "c16",
+      "kind": "requirement",
+      "text": "Safety contract: every write verb is dry-run by default and --apply commits; rules enforce a minimum off-time and hysteresis; outbound calls are rate-limited; what a rule would do right now is inspectable before it is armed.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h8",
+          "text": "A rules-engine test proves a flapping condition cannot cycle the compressor faster than the minimum off-time.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": ""
+    },
+    {
+      "id": "c17",
+      "kind": "decision",
+      "text": "The local store is SQLite via the stdlib sqlite3 module - keeps the zero-runtime-dependency stance while giving an indexed, offline-queryable time-series.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h9",
+          "text": "The store absorbs per-model heterogeneous sensor sets without schema migrations: readings keyed on pod and timestamp with flexible field storage.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": ""
+    },
+    {
+      "id": "c18",
+      "kind": "decision",
+      "text": "The core CLI stays zero-runtime-dependency; surfaces that need real deps ship as optional extras (for example sensibo-cli[mcp]); the web dashboard uses stdlib http.server.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h10",
+          "text": "sensibo --help works with zero installed runtime dependencies; an extra only gates its own surface, never the core CLI.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": ""
+    },
+    {
+      "id": "c19",
+      "kind": "assumption",
+      "text": "One poll cycle is one GET /users/me/pods?fields=* call with gzip - never per-device loops; 429 gets backoff; cadence is at least 60 seconds.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": ""
+    },
+    {
+      "id": "c20",
+      "kind": "success_signal",
+      "text": "From a fresh install with only SENSIBO_API_KEY set: sensibo devices lists the fleet with per-model sensors; collect runs on a cadence and an offline query answers from the local store; a rule dry-runs, arms, and drives the AC without short-cycling; an MCP client sets a target temperature; a browser on another LAN machine shows live readings and history.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h19",
+          "text": "The success walkthrough is scripted in the docs and every step passes against the real fleet, not mocks.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": ""
+    }
+  ],
+  "open_vagueness": [
+    {
+      "id": "v1",
+      "text": "Empirical historicalMeasurements window and granularity - probe days=730/30/7 against the real fleet during implementation, before backfill lands.",
+      "kind": "unknown_nonblocking",
+      "claim_id": "c11"
+    },
+    {
+      "id": "v2",
+      "text": "The real rate-limit ceiling - find empirically, gently.",
+      "kind": "unknown_nonblocking",
+      "claim_id": null
+    },
+    {
+      "id": "v3",
+      "text": "Whether timer/ and schedules/ live under API v1 or v2.",
+      "kind": "unknown_nonblocking",
+      "claim_id": null
+    },
+    {
+      "id": "v4",
+      "text": "Always-on host for the collector and rules daemon (which machine, systemd unit, restart policy) - the deployment story.",
+      "kind": "follow_up",
+      "claim_id": null
+    },
+    {
+      "id": "v5",
+      "text": "Energy and runtime budget conditions in rules.",
+      "kind": "follow_up",
+      "claim_id": null
+    },
+    {
+      "id": "v6",
+      "text": "Matter or HomeKit bridges as alternative local transports.",
+      "kind": "out_of_scope",
+      "claim_id": null
+    }
+  ],
+  "scope_entries": []
+}

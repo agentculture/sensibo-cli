@@ -1,8 +1,9 @@
 # The Sensibo API
 
 The reference this project builds on. Researched 2026-07-14 against Sensibo's
-official OpenAPI spec, Sensibo's own Python SDK, the Home Assistant integration,
-and `pysensibo`.
+official API documentation at <https://support.sensibo.com/api/> (the
+operator-supplied primary source), the official OpenAPI spec, Sensibo's own
+Python SDK, the Home Assistant integration, and `pysensibo`.
 
 **Every claim below is tagged with a confidence level.** Where something is
 unverified, it says so — do not promote a *likely* to a *confirmed* without

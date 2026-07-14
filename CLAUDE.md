@@ -101,9 +101,11 @@ off-time / hysteresis so rules cannot short-cycle a unit, rate-limit outbound
 calls, and make "what would this rule do right now?" inspectable before the rule
 is armed.
 
-**Secrets.** The API key comes from the environment (`SENSIBO_API_KEY`) — never
-from a committed file, and never echoed back in output or logs. Note the Sensibo
-API takes the key as a **query parameter**, so scrub URLs before logging them.
+**Secrets.** The API key resolves as `SENSIBO_API_KEY` in the environment
+first, then `~/.sensibo/.env` — the operator-maintained canonical file (chmod
+600). A repo-local `.env` is gitignored and transitional only. The key is never
+committed and never echoed back in output or logs. Note the Sensibo API takes
+the key as a **query parameter**, so scrub URLs before logging them.
 
 **Every PR bumps the version** — including docs-only PRs. The `version-check` CI
 job fails the run otherwise.
