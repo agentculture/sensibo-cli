@@ -441,6 +441,69 @@ asleep. Every response carries an
     sensibo timer clear ac1 --apply --json
 """
 
+_RULE = """\
+# sensibo rule
+
+The **local** rules engine: conditions over the readings already in your local
+store drive an AC. This is the product's differentiator — a rule can combine
+conditions **across rooms** (e.g. `motion in Hallway AND temperature in Bedroom
+> 26`), addressing each location by name (stable id, operator alias, or
+Sensibo's room name), which Sensibo's per-device Climate React cannot express.
+
+**Local execution.** Every rule and every line this noun prints declares
+`execution: local (stops when this daemon stops)`. That is the deliberate
+contrast with the cloud verbs (`smartmode`, `schedule`, `timer`), which keep
+running inside Sensibo's cloud while this machine sleeps. A local rule only acts
+while `sensibo rule run` is running.
+
+## Safety (why this noun exists)
+
+**This drives a compressor in someone's home.** Three guards, all enforced:
+
+- A rule is inert until **armed**, and a rule cannot be armed until a
+  `rule dry-run` has evaluated its *current* definition. Editing the rule
+  changes its fingerprint and invalidates the dry-run, so it must be dry-run
+  again before it can re-arm.
+- A per-pod **minimum off-time** (at least 10 minutes, persisted across
+  restarts) refuses to flip a pod's power state again inside the window, so a
+  flapping condition cannot short-cycle the compressor.
+- One evaluation pass writes each pod **at most once**, through the API client's
+  own rate limiting.
+
+`rule add`/`remove`/`arm`/`disarm` edit the local rules file only and act
+immediately. `rule run` is the ONLY verb that drives an AC, and only for armed
+rules.
+
+## Condition grammar
+
+Combinators `all` / `any` / `not`; leaves:
+
+- `{"type":"threshold","location":<name>,"field":<f>,"op":">|>=|<|<=|==|!=","value":<n>}`
+- `{"type":"occupancy","location":<name>,"occupied":true,"field":<optional>}`
+- `{"type":"time_window","start":"HH:MM","end":"HH:MM"}` (wraps past midnight)
+
+## Verbs
+
+- `sensibo rule list` — every rule with its armed / dry-run state.
+- `sensibo rule add --file F` **or** `--name N --pod P --power on --mode cool
+  --target 22 --when-location Bedroom --when-field temperature --when-op '>'
+  --when-value 26` — define a rule (lands disarmed).
+- `sensibo rule remove <name>` — delete a rule.
+- `sensibo rule dry-run <name>` — evaluate NOW against the store; read-only.
+- `sensibo rule arm <name>` / `disarm <name>` — activate / deactivate.
+- `sensibo rule run [--once | --daemon --interval S]` — drive armed rules'
+  pods. Each action is logged to stderr with the rule name.
+- `sensibo rule overview` — describe this noun.
+
+## Usage
+
+    sensibo rule add --file examples/cross-room-motion-temp.rule.json
+    sensibo rule dry-run cool-bedroom-when-hallway-busy
+    sensibo rule arm cool-bedroom-when-hallway-busy
+    sensibo rule run --once --json
+    sensibo rule run --daemon --interval 90
+"""
+
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
     ("sensibo-cli",): _ROOT,
@@ -462,6 +525,15 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("room", "overview"): _ROOM,
     ("room", "list"): _ROOM_LIST,
     ("room", "name"): _ROOM_NAME,
+    ("rule",): _RULE,
+    ("rule", "overview"): _RULE,
+    ("rule", "list"): _RULE,
+    ("rule", "add"): _RULE,
+    ("rule", "remove"): _RULE,
+    ("rule", "dry-run"): _RULE,
+    ("rule", "arm"): _RULE,
+    ("rule", "disarm"): _RULE,
+    ("rule", "run"): _RULE,
     ("devices",): _DEVICES,
     ("read",): _READ,
     ("smartmode",): _SMARTMODE,
