@@ -7,20 +7,29 @@ that drive the AC.
 > **Unofficial community tool.** Sensibo is a trademark of Sensibo Ltd. This
 > project is not affiliated with, endorsed by, or supported by them.
 >
-> **Status: scaffold.** The CLI today ships its introspection verbs
-> (`whoami`, `learn`, `explain`, `overview`, `doctor`) plus two read-only fleet
-> verbs (`devices`, `read`). None of the AC control, collection, or automation
-> features exist yet. See the [roadmap](docs/roadmap.md).
+> **Status: all three pillars shipped** — control (`set`), collection
+> (`collect`/`query`/`room`), and automation (`rule` locally, plus
+> `smartmode`/`schedule`/`timer` in Sensibo's cloud) — with three integration
+> surfaces: `import sensibo`, MCP, and a LAN web dashboard. Acceptance-tested
+> against a real fleet: [docs/walkthrough.md](docs/walkthrough.md).
 
-## What it will do
+## What it does
 
 1. **Control the AC** — power, mode, target temperature, fan speed, swing;
-   per device or across the house.
+   per device or across the house (`set`, dry-run by default).
 2. **Collect every sensor reading locally** — poll on a cadence and persist to a
    local time-series store you own and can query offline, retained past the
-   window Sensibo's own cloud keeps.
+   window Sensibo's own cloud keeps (`collect`, `query`, `room`).
 3. **Automate conditions that drive the AC** — thresholds, schedules, occupancy,
-   and the cross-room logic Sensibo's own engine cannot express.
+   and the cross-room logic Sensibo's own engine cannot express (`rule`), plus
+   scriptable front-ends for Sensibo's cloud engine (`smartmode`, `schedule`,
+   `timer`).
+
+Bigger apps connect three ways: `import sensibo` ([docs/api.md](docs/api.md)),
+an MCP server ([docs/mcp.md](docs/mcp.md), optional `sensibo-cli[mcp]` extra),
+and a LAN web dashboard ([docs/web.md](docs/web.md)). All three pillars were
+acceptance-tested against a real fleet —
+[docs/walkthrough.md](docs/walkthrough.md).
 
 ## "Locally" — read this before you assume
 
@@ -85,6 +94,29 @@ uv run sensibo devices          # list the fleet, one API call
 uv run sensibo read <pod-id>    # every current reading for a location
 ```
 
+The pillars, end to end:
+
+```bash
+# Control — dry-run first, --apply commits
+uv run sensibo set <pod-id> --mode cool --target 24
+uv run sensibo set <pod-id> --mode cool --target 24 --apply
+
+# Collect — first run backfills what the cloud allows, then retains locally
+uv run sensibo collect --once           # or --daemon for continuous collection
+uv run sensibo query latest <pod-id>    # offline, from the local store
+uv run sensibo room name <id> bedroom --apply   # name your sensing locations
+
+# Automate — local rules need a dry-run before they can arm
+uv run sensibo rule add --file examples/cross-room-motion-temp.rule.json
+uv run sensibo rule dry-run <name> && uv run sensibo rule arm <name>
+uv run sensibo rule run --daemon        # local engine; cloud verbs: smartmode,
+                                        # schedule, timer
+
+# Connect bigger apps
+uv run sensibo web                      # LAN dashboard on :8323
+uv run sensibo mcp serve                # needs: pip install "sensibo-cli[mcp]"
+```
+
 ## CLI
 
 | Verb | What it does |
@@ -97,12 +129,22 @@ uv run sensibo read <pod-id>    # every current reading for a location
 | `cli overview` | Describe the CLI surface itself. |
 | `devices` | List the fleet — pods and nested Room Sensors — from one API call. |
 | `read <id>` | One snapshot of every current reading for a pod or Room Sensor id. |
+| `set <pod>` | Control the AC — dry-run by default, `--apply` commits. |
+| `collect` | Poll the fleet on a cadence into the local store; first run backfills. |
+| `query` | Offline reads from the local store: latest, range, locations. |
+| `room` | Name sensing locations; flag sensors gone stale. |
+| `rule` | Local rules engine: cross-room conditions, hysteresis, dry-run before arm. |
+| `smartmode` | Climate React — runs in Sensibo's cloud. |
+| `schedule` | Cloud schedules (survive the local daemon sleeping). |
+| `timer` | Cloud one-shot timers. |
+| `mcp serve` | MCP server over stdio (`sensibo-cli[mcp]` extra). |
+| `web` | LAN dashboard: open reads, token-gated writes. |
 
 Every command supports `--json`. Results go to stdout, errors and diagnostics to
 stderr — never mixed. Exit codes: `0` success, `1` user error, `2` environment
 error, `3+` reserved.
 
-**Every write verb will be dry-run by default, with `--apply` to commit.** This
+**Every write verb is dry-run by default, with `--apply` to commit.** This
 tool turns on air conditioners in someone's home; a command that acts by accident
 is a bug.
 
