@@ -531,6 +531,17 @@ def test_schedules_endpoints_use_a_trailing_slash(monkeypatch: pytest.MonkeyPatc
     assert json.loads(fake.calls[-1].data.decode("utf-8")) == body
 
 
+def test_delete_schedule_uses_the_per_schedule_trailing_slash_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _SingleFakeUrlopen(_FakeResponse(b""))
+    client = _make_client(monkeypatch, fake)
+
+    assert client.delete_schedule("pod1", "sched1") is None
+    assert _split(fake.calls[-1].full_url)[0] == "/api/v2/pods/pod1/schedules/sched1/"
+    assert fake.calls[-1].get_method() == "DELETE"
+
+
 def test_get_events(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _SingleFakeUrlopen(_json_response({"result": []}))
     client = _make_client(monkeypatch, fake)
