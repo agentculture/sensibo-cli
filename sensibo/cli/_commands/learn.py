@@ -10,11 +10,27 @@ import argparse
 
 from sensibo import __version__
 from sensibo.cli._output import emit_result
+from sensibo.explain.catalog import COMMAND_ORDER, SUMMARIES
 
 _DISCLAIMER = (
     "Unofficial community tool. Sensibo is a trademark of Sensibo Ltd; this "
     "project is not affiliated with, endorsed by, or supported by them."
 )
+
+
+def _command_map_lines() -> list[str]:
+    """Render the "Commands" block from the catalog's single source of truth.
+
+    Walks :data:`sensibo.explain.catalog.COMMAND_ORDER` instead of a second,
+    hand-maintained list — a manually maintained command list here is exactly
+    what drifted from the real verb surface as verbs landed (Qodo review
+    3581287831). A new verb adds one entry to the catalog and both this text
+    block and :func:`_as_json_payload`'s ``commands`` list pick it up.
+    """
+    rows = [(f"sensibo {' '.join(path)}", SUMMARIES[path]) for path in COMMAND_ORDER]
+    width = max(len(invocation) for invocation, _summary in rows) + 2
+    return [f"  {invocation.ljust(width)}{summary}" for invocation, summary in rows]
+
 
 _TEXT = f"""\
 sensibo — control Sensibo smart-AC devices from the command line.
@@ -36,24 +52,7 @@ STATUS: all three pillars are shipped, plus the integration surfaces
 
 Commands
 --------
-  sensibo whoami             Identity from culture.yaml.
-  sensibo learn              This self-teaching prompt.
-  sensibo explain <path>...  Markdown docs for any noun/verb path.
-  sensibo overview           Descriptive snapshot of the agent.
-  sensibo doctor             Check the agent-identity invariants.
-  sensibo cli overview       Describe the CLI surface itself.
-  sensibo devices            List the fleet from one API call.
-  sensibo read <id>          One snapshot of every current reading.
-  sensibo set <pod> ...      Control the AC (dry-run; --apply commits).
-  sensibo collect            Poll on a cadence into the local store.
-  sensibo query ...          Offline reads from the local store.
-  sensibo room ...           Name sensing locations; flag stale sensors.
-  sensibo rule ...           Local rules engine (dry-run before arm).
-  sensibo smartmode ...      Climate React (runs in Sensibo's cloud).
-  sensibo schedule ...       Cloud schedules.
-  sensibo timer ...          Cloud timers.
-  sensibo mcp serve          MCP server (needs the sensibo-cli[mcp] extra).
-  sensibo web                LAN dashboard: open reads, token-gated writes.
+{chr(10).join(_command_map_lines())}
 
 Note: the console command is `sensibo`. `sensibo-cli` is the PyPI dist name.
 
@@ -99,50 +98,7 @@ def _as_json_payload() -> dict[str, object]:
             "integration surfaces: Python import, MCP (sensibo-cli[mcp] extra), and the "
             "LAN web dashboard"
         ),
-        "commands": [
-            {"path": ["whoami"], "summary": "Identity probe from culture.yaml."},
-            {"path": ["learn"], "summary": "Self-teaching prompt."},
-            {"path": ["explain"], "summary": "Markdown docs by path."},
-            {"path": ["overview"], "summary": "Descriptive snapshot of the agent."},
-            {"path": ["doctor"], "summary": "Check the agent-identity invariants."},
-            {"path": ["cli", "overview"], "summary": "Describe the CLI surface."},
-            {"path": ["devices"], "summary": "List the fleet from one API call."},
-            {
-                "path": ["read"],
-                "summary": "One snapshot of every current reading for a location.",
-            },
-            {
-                "path": ["set"],
-                "summary": "Control the AC: dry-run by default, --apply commits.",
-            },
-            {
-                "path": ["collect"],
-                "summary": "Poll the fleet on a cadence into the local store.",
-            },
-            {"path": ["query"], "summary": "Offline reads from the local store."},
-            {
-                "path": ["room"],
-                "summary": "Name sensing locations; flag stale sensors.",
-            },
-            {
-                "path": ["rule"],
-                "summary": "Local rules engine: dry-run before arm, hysteresis.",
-            },
-            {
-                "path": ["smartmode"],
-                "summary": "Climate React — runs in Sensibo's cloud.",
-            },
-            {"path": ["schedule"], "summary": "Cloud schedules."},
-            {"path": ["timer"], "summary": "Cloud timers."},
-            {
-                "path": ["mcp", "serve"],
-                "summary": "MCP server (needs the sensibo-cli[mcp] extra).",
-            },
-            {
-                "path": ["web"],
-                "summary": "LAN dashboard: open reads, token-gated writes.",
-            },
-        ],
+        "commands": [{"path": list(path), "summary": SUMMARIES[path]} for path in COMMAND_ORDER],
         "exit_codes": {
             "0": "success",
             "1": "user-input error",
