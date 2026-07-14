@@ -119,9 +119,11 @@ def test_flapping_condition_cannot_short_cycle_the_compressor(tmp_path: Path) ->
     now = start
     for i in range(40):
         temp = 26.0 if i % 2 == 0 else 20.0  # oscillate hot/cold every pass
+        # No clock jump here: advance BOTH the wall and the monotonic clock in
+        # lockstep, so this exercises the gate's normal path (both clocks agree).
         with Store(db_path=db) as store:
             store.record_reading("ac1", "temperature", temp, timestamp=now)
-            outcomes = run_once(store, rules, client, now_ts=now, min_off_time=min_off)
+            outcomes = run_once(store, rules, client, now_ts=now, mono_ts=now, min_off_time=min_off)
         for outcome in outcomes:
             if outcome.wrote and "on" in outcome.changes:
                 power_write_times.append(now)
@@ -166,6 +168,143 @@ def test_hysteresis_state_survives_a_restart(tmp_path: Path) -> None:
     assert client._pods["ac1"]["on"] is True, "power was flipped inside the off-time window"
     suppressed = [o for o in outcomes if o.fired and o.suppressed_reason]
     assert any("off-time" in o.suppressed_reason for o in suppressed)
+
+
+# --- clock-jump robustness of the hysteresis gate (Qodo 3581287821) ---------
+
+
+def test_forward_wall_clock_jump_within_one_process_cannot_bypass_gate(tmp_path: Path) -> None:
+    """A forward wall-clock jump (NTP correction / clock skew) inside ONE process
+    must not weaken short-cycling protection.
+
+    The wall clock alone would report the off-time elapsed and permit an early
+    power flip; the per-process monotonic clock has not advanced that far, so it
+    must keep the gate closed.
+    """
+    db = tmp_path / "sensibo.db"
+    rules_path = tmp_path / "rules.json"
+    _seed_pod(db)
+
+    rules = RulesStore(rules_path)
+    rules.add(_threshold_rule("cool-on", "ac1", on=True, op=">", value=24))
+    rules.add(_threshold_rule("cool-off", "ac1", on=False, op="<", value=22))
+    _arm(rules, "cool-on")
+    _arm(rules, "cool-off")
+
+    client = _FakeClient({"ac1": {"on": False, "mode": "cool", "targetTemperature": 20}})
+    min_off = 600.0
+
+    # Pass 1: hot -> turn on. Wall clock 1000, monotonic 5000.
+    with Store(db_path=db) as store:
+        store.record_reading("ac1", "temperature", 26.0, timestamp=1000.0)
+        run_once(store, rules, client, now_ts=1000.0, mono_ts=5000.0, min_off_time=min_off)
+    assert client._pods["ac1"]["on"] is True
+
+    # Pass 2: cold -> cool-off wants power off. The WALL clock leaps ~100000s
+    # forward (well past the off-time), but only 60s of monotonic time actually
+    # passed in this process. The gate must still block the power flip.
+    with Store(db_path=db) as store:
+        store.record_reading("ac1", "temperature", 20.0, timestamp=101000.0)
+        outcomes = run_once(
+            store, rules, client, now_ts=101000.0, mono_ts=5060.0, min_off_time=min_off
+        )
+    assert client._pods["ac1"]["on"] is True, "forward wall-clock jump bypassed the gate"
+    suppressed = [o for o in outcomes if o.fired and o.suppressed_reason]
+    assert any("off-time" in (o.suppressed_reason or "") for o in suppressed)
+
+
+def test_future_persisted_stamp_suppresses_and_clamps_remaining(tmp_path: Path) -> None:
+    """A persisted last-power-change that lies in the FUTURE (the wall clock was
+    set backwards after the write) must SUPPRESS a power flip, never permit one
+    on a negative elapsed, and report a remaining time clamped to the off-time
+    window rather than ballooning by the size of the backwards jump.
+    """
+    db = tmp_path / "sensibo.db"
+    rules_path = tmp_path / "rules.json"
+    _seed_pod(db)
+    with Store(db_path=db) as store:
+        store.record_reading("ac1", "temperature", 20.0, timestamp=1000.0)
+
+    rules = RulesStore(rules_path)
+    rules.add(_threshold_rule("cool-off", "ac1", on=False, op="<", value=22))
+    stored = rules.get("cool-off")
+
+    # Future timestamp: the last power change is recorded at 2000, but "now" is 1000.
+    rules.record_power_change("ac1", 2000.0)
+
+    with Store(db_path=db) as store:
+        report = dry_run(store, rules, stored, now_ts=1000.0, min_off_time=600.0)
+    gate = report["power_gate"]
+    assert gate["would_suppress"] is True
+    # Clamped: without clamping, remaining would be 600 - (1000 - 2000) = 1600.
+    assert 0.0 <= gate["remaining_seconds"] <= 600.0
+
+    # The write path refuses too: it must not flip on a (negative) elapsed.
+    rules.record_dry_run("cool-off")
+    rules.arm("cool-off")
+    client = _FakeClient({"ac1": {"on": True, "mode": "cool", "targetTemperature": 20}})
+    with Store(db_path=db) as store:
+        run_once(store, rules, client, now_ts=1000.0, min_off_time=600.0)
+    assert client._pods["ac1"]["on"] is True, "future stamp permitted an early flip"
+
+
+def test_restart_without_monotonic_stamp_enforces_wall_clock_minimum(tmp_path: Path) -> None:
+    """After a restart there is NO in-process monotonic stamp, so the persisted
+    wall-clock timestamp is the sole guard. It must both BLOCK a too-early flip
+    and ALLOW one once the wall-clock off-time has genuinely elapsed.
+    """
+    db = tmp_path / "sensibo.db"
+    rules_path = tmp_path / "rules.json"
+    _seed_pod(db)
+
+    rules = RulesStore(rules_path)
+    rules.add(_threshold_rule("cool-on", "ac1", on=True, op=">", value=24))
+    rules.add(_threshold_rule("cool-off", "ac1", on=False, op="<", value=22))
+    _arm(rules, "cool-on")
+    _arm(rules, "cool-off")
+
+    client = _FakeClient({"ac1": {"on": False, "mode": "cool", "targetTemperature": 20}})
+    with Store(db_path=db) as store:
+        store.record_reading("ac1", "temperature", 26.0, timestamp=1000.0)
+        run_once(store, rules, client, now_ts=1000.0, mono_ts=5000.0, min_off_time=600.0)
+    assert client._pods["ac1"]["on"] is True
+
+    # Restart: a brand-new store from the same file has no in-process monotonic
+    # stamp for ac1 (it is deliberately not persisted).
+    rebooted = RulesStore(rules_path)
+    assert rebooted.monotonic_power_change("ac1") is None
+
+    # 300s later (wall) the flip is refused. The wildly-large mono_ts would, if
+    # consulted, say plenty of time passed — but monotonic is NOT consulted
+    # across a restart, so the wall-clock minimum governs and blocks.
+    with Store(db_path=db) as store:
+        store.record_reading("ac1", "temperature", 20.0, timestamp=1300.0)
+        run_once(store, rebooted, client, now_ts=1300.0, mono_ts=999999.0, min_off_time=600.0)
+    assert client._pods["ac1"]["on"] is True, "flip allowed inside the wall-clock off-time"
+
+    # 700s later (> 600) the wall-clock off-time has genuinely elapsed: allow it.
+    # (mono_ts=1.0 is ignored because there is still no stamp for this pod.)
+    with Store(db_path=db) as store:
+        store.record_reading("ac1", "temperature", 20.0, timestamp=1700.0)
+        run_once(store, rebooted, client, now_ts=1700.0, mono_ts=1.0, min_off_time=600.0)
+    assert client._pods["ac1"]["on"] is False, "flip refused after the off-time elapsed"
+
+
+def test_monotonic_power_change_is_recorded_in_process_but_not_persisted(tmp_path: Path) -> None:
+    """The monotonic stamp guards clock jumps WITHIN one process; it is not
+    comparable across processes, so it is held in memory only and a restart
+    starts with none. The persisted wall-clock timestamp is what survives.
+    """
+    rules_path = tmp_path / "rules.json"
+    rules = RulesStore(rules_path)
+    rules.record_power_change("ac1", 1000.0, monotonic_ts=5000.0)
+
+    assert rules.monotonic_power_change("ac1") == 5000.0
+    assert rules.pod_state("ac1").last_power_change == 1000.0
+
+    rebooted = RulesStore(rules_path)
+    assert rebooted.monotonic_power_change("ac1") is None
+    assert rebooted.pod_state("ac1").last_power_change == 1000.0
 
 
 def test_one_pass_writes_each_pod_at_most_once(tmp_path: Path) -> None:

@@ -88,6 +88,13 @@ class RulesStore:
         self.path: Path = resolve_rules_path(path)
         self._rules: dict[str, StoredRule] = {}
         self._pods: dict[str, PodState] = {}
+        # Per-pod ``time.monotonic()`` stamp of the last power change, held in
+        # memory only and deliberately NOT persisted. A monotonic clock is not
+        # comparable across processes (its zero is arbitrary), so a fresh process
+        # starts with none and the hysteresis gate falls back to the persisted
+        # wall-clock timestamp. Within one process lifetime it is the guard that
+        # a wall-clock (NTP) jump cannot fool — see :mod:`sensibo.rules.engine`.
+        self._monotonic_power_change: dict[str, float] = {}
         self._load()
 
     # -- load / save ------------------------------------------------------
@@ -188,10 +195,24 @@ class RulesStore:
     def pod_state(self, pod_id: str) -> PodState:
         return self._pods.get(pod_id, PodState())
 
-    def record_power_change(self, pod_id: str, ts: float) -> None:
+    def monotonic_power_change(self, pod_id: str) -> float | None:
+        """The in-process ``time.monotonic()`` stamp of this pod's last power change.
+
+        Returns ``None`` when this pod's power has not changed during the CURRENT
+        process lifetime (e.g. right after a restart). Never persisted — see the
+        note in :meth:`__init__`.
+        """
+        return self._monotonic_power_change.get(pod_id)
+
+    def record_power_change(
+        self, pod_id: str, ts: float, *, monotonic_ts: float | None = None
+    ) -> None:
         state = self._pods.setdefault(pod_id, PodState())
         state.last_power_change = ts
         state.last_action = ts
+        if monotonic_ts is not None:
+            # In-memory only; intentionally not written by ``_save``.
+            self._monotonic_power_change[pod_id] = monotonic_ts
         self._save()
 
     def record_action(self, pod_id: str, ts: float) -> None:

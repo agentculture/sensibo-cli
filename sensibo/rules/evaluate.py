@@ -180,9 +180,7 @@ def _evaluate_time_window(cond: dict[str, Any], *, now_ts: float) -> ConditionRe
         met = now_minutes >= start or now_minutes < end
     return ConditionResult(
         met=met,
-        detail=(
-            f"time_window {cond['start']}-{cond['end']}: " f"local time {local.strftime('%H:%M')}"
-        ),
+        detail=(f"time_window {cond['start']}-{cond['end']}: local time {local.strftime('%H:%M')}"),
     )
 
 
