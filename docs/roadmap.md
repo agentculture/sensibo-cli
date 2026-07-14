@@ -76,6 +76,19 @@ and 5 above:
 - **"What would this rule do right now?" must be inspectable before it is armed.**
   A rule you cannot dry-run is a rule you cannot trust.
 
+## Answered: the always-on host
+
+The spec parked "always-on host for the collector and rules daemon (which
+machine, systemd unit, restart policy)" as an open follow-up. It is answered in
+[`deployment.md`](deployment.md): `sensibo service install --apply` writes
+systemd **user** units for `collect --daemon` and `web` with `Restart=always`,
+and enables `loginctl` lingering so they start at boot without a login.
+
+The rules daemon is **deliberately excluded** from that install — it drives a
+compressor unattended, and a restarting rules daemon raises a question a
+restarting poller does not (what happens to a hysteresis window mid-restart?).
+That stays a foreground, explicit decision until it is thought through.
+
 ## Open questions
 
 Tracked in [`sensibo-api.md`](sensibo-api.md#open-questions-to-settle-against-real-hardware).

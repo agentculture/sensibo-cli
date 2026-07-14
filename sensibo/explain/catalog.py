@@ -589,6 +589,79 @@ Bind `127.0.0.1` instead if that is unacceptable on your network. Writes
 always require the token regardless of bind address. See `docs/web.md`.
 """
 
+_SERVICE = """\
+# sensibo service
+
+Makes collection and the dashboard **always-on**: installs `collect --daemon`
+and `web` as systemd **user** units with `Restart=always`, and turns on
+`loginctl` lingering so they start at **boot** — no login, no terminal, no
+`sudo`, no `/etc`.
+
+## Why this exists
+
+Sensibo's cloud serves only about the last **7 days** of history. A collection
+gap while the host is asleep is therefore **permanently lost data**, not a
+delayed sync — so the retention pillar is only as good as the collector's
+uptime. And `collect --daemon` is not internally resilient: an `ApiError` (a
+cloud blip, or the network not being up yet at boot) propagates out of its loop
+and exits the process with code 2. `Restart=always` is the only thing that
+makes it survive that.
+
+Lingering is the other half. A systemd *user* manager normally starts at login
+and dies at logout, which would make "always-on" a lie; `loginctl
+enable-linger` starts it at boot instead. Both halves, or neither.
+
+## Verbs
+
+- `sensibo service install [--apply]` — write the units, enable lingering,
+  start them. **Dry-run by default**: prints every file it would write and
+  every command it would run, and changes nothing. `--show-units` dumps the
+  full unit contents.
+- `sensibo service status` — per-unit enabled/active state, the lingering
+  flag, and **how recently a reading actually landed** (an active collector
+  whose newest reading is 40 minutes old is a broken collector).
+- `sensibo service uninstall [--apply]` — disable, stop, and delete the units.
+  Never disables lingering: an operator may have enabled it for something else.
+- `sensibo service overview` — describe this noun.
+
+## Usage
+
+    sensibo service install                     # dry-run: the full plan
+    sensibo service install --show-units        # ... including the unit files
+    sensibo service install --apply             # commit
+    sensibo service install --apply --interval 120 --bind 127.0.0.1:8323
+    sensibo service install --apply --no-web    # collector only
+    sensibo service status
+    sensibo service uninstall --apply
+
+## What gets installed
+
+| Unit | Runs | Restart |
+|---|---|---|
+| `sensibo-collect.service` | `sensibo collect --daemon --interval 60` | `always`, 30s |
+| `sensibo-web.service` | `sensibo web --bind 0.0.0.0:8323` | `always`, 5s |
+| `sensibo.target` | groups both; `WantedBy=default.target` | — |
+
+Logs go to the journal: `journalctl --user -u sensibo-collect -f`.
+
+## What is deliberately NOT installed
+
+`rule run --daemon`. It drives a real compressor unattended, so arming it is an
+explicit operator decision — never a side effect of turning on collection. Run
+it yourself, or track the follow-up issue in `docs/deployment.md`.
+
+## The API key
+
+Not named in any unit file — a unit file is world-readable. The key resolves
+inside the client (`SENSIBO_API_KEY`, else `~/.sensibo/.env`, mode 600), so
+systemd never parses the dotenv and never logs the key. See `docs/deployment.md`.
+
+## Linux only
+
+systemd user units need Linux. On macOS or Windows `install --apply` fails with
+an environment error (exit 2) and points at that platform's own supervisor.
+"""
+
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
     ("sensibo-cli",): _ROOT,
@@ -640,6 +713,11 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("timer", "set"): _TIMER,
     ("timer", "clear"): _TIMER,
     ("web",): _WEB,
+    ("service",): _SERVICE,
+    ("service", "overview"): _SERVICE,
+    ("service", "install"): _SERVICE,
+    ("service", "uninstall"): _SERVICE,
+    ("service", "status"): _SERVICE,
 }
 
 # --- single source of truth for `sensibo learn`'s "Commands" map -----------
@@ -676,6 +754,7 @@ COMMAND_ORDER: tuple[tuple[str, ...], ...] = (
     ("timer",),
     ("mcp", "serve"),
     ("web",),
+    ("service",),
 )
 
 # One-line summaries for `sensibo learn`'s command map, keyed by the same path
@@ -699,6 +778,7 @@ SUMMARIES: dict[tuple[str, ...], str] = {
     ("timer",): "Cloud timers.",
     ("mcp", "serve"): "MCP server (needs the sensibo-cli[mcp] extra).",
     ("web",): "LAN dashboard: open reads, token-gated writes.",
+    ("service",): "Always-on systemd units: collect + web, surviving reboot.",
 }
 
 # Guard: every ordered entry must have both a summary and a resolvable

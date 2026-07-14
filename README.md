@@ -115,7 +115,17 @@ uv run sensibo rule run --daemon        # local engine; cloud verbs: smartmode,
 # Connect bigger apps
 uv run sensibo web                      # LAN dashboard on :8323
 uv run sensibo mcp serve                # needs: pip install "sensibo-cli[mcp]"
+
+# Keep it running — collection and the dashboard, surviving reboot
+uv run sensibo service install          # dry-run: every file and command
+uv run sensibo service install --apply  # systemd user units + lingering
+uv run sensibo service status           # is a reading actually landing?
 ```
+
+**Collection only retains what it was awake for.** Sensibo's cloud serves only
+about the last 7 days, so a gap while the host is asleep is permanently lost
+data — `sensibo service install --apply` is what makes the collector always-on.
+See [`docs/deployment.md`](docs/deployment.md).
 
 ## CLI
 
@@ -139,6 +149,7 @@ uv run sensibo mcp serve                # needs: pip install "sensibo-cli[mcp]"
 | `timer` | Cloud one-shot timers. |
 | `mcp serve` | MCP server over stdio (`sensibo-cli[mcp]` extra). |
 | `web` | LAN dashboard: open reads, token-gated writes. |
+| `service` | Always-on systemd user units: `collect` + `web`, surviving reboot. |
 
 Every command supports `--json`. Results go to stdout, errors and diagnostics to
 stderr — never mixed. Exit codes: `0` success, `1` user error, `2` environment
@@ -162,6 +173,9 @@ is a bug.
 - [`docs/web.md`](docs/web.md) — the LAN dashboard: quickstart, the
   reads-open/writes-token-gated model, the token file, and the offline
   property.
+- [`docs/deployment.md`](docs/deployment.md) — the always-on host: the systemd
+  user units `sensibo service` installs, why lingering is load-bearing, and why
+  the rules daemon is deliberately excluded.
 - [`docs/roadmap.md`](docs/roadmap.md) — build order, and which automations run
   in Sensibo's cloud vs. need a daemon alive.
 - [`docs/history.md`](docs/history.md) — the before-state this build started

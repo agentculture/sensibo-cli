@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-07-14
+
+The always-on host — closing the deployment story the spec parked as an open
+follow-up ("Always-on host for the collector and rules daemon: which machine,
+systemd unit, restart policy").
+
+### Added
+
+- **`sensibo/service/`** — systemd **user** unit lifecycle: render, install,
+  status, uninstall. No root, no `/etc`, no `sudo`. Pure plan builders
+  (`build_install_plan`, `build_uninstall_plan`) describe every write and
+  command; `apply_install` / `apply_uninstall` are the only functions that
+  mutate, so the dry-run contract is structural rather than a flag check.
+- **`sensibo service`** — new noun: `install` / `status` / `uninstall` /
+  `overview`. Dry-run by default (`--apply` commits), `--show-units` prints the
+  full unit bodies, `--json` carries the whole inspectable plan.
+  - `sensibo-collect.service` — `collect --daemon`, `Restart=always`.
+    Load-bearing: `collect --daemon` exits (code 2) on any `ApiError` — a cloud
+    blip, or the network not up yet at boot — and systemd is the only thing
+    that brings it back. Sensibo's cloud serves only ~7 days of history, so a
+    gap it fails to recover is permanently lost data.
+  - `sensibo-web.service` — `web`, `Restart=always`.
+  - `sensibo.target` — groups both, `WantedBy=default.target`.
+  - `loginctl enable-linger` — starts the user manager at **boot**, not at
+    login. Without it the units stop at logout and "always-on" is a lie.
+    `uninstall` never disables it (the operator may rely on it elsewhere).
+- **`sensibo service status`** — per-unit enabled/active, the lingering flag,
+  and **how recently a reading actually landed**: `active` only proves the
+  process runs; the store's freshness is the only proof collection works. The
+  store section prints even when the units are absent, because "you have data
+  and nothing is keeping it fresh" is exactly that operator's problem.
+- **[`docs/deployment.md`](docs/deployment.md)** — the always-on host: why
+  lingering is load-bearing, the API-key trap systemd's `EnvironmentFile=`
+  would introduce, the `--exec-path` venv trap, and reading the journal.
+
+### Changed
+
+- `docs/roadmap.md` — the always-on-host open question is now answered.
+- README — a "keep it running" step in the quickstart, `service` in the verb
+  table, `docs/deployment.md` in the docs index.
+
+### Security
+
+- **No unit file ever names the API key**, and a test enforces it. Unit files
+  in `~/.config/systemd/user/` are world-readable. The key resolves inside the
+  client at runtime (`SENSIBO_API_KEY`, else `~/.sensibo/.env`, mode 600), so
+  systemd never parses the dotenv and never logs the key — which also sidesteps
+  `EnvironmentFile=` silently mangling a shell-style `.env`.
+- **`rule run --daemon` is deliberately NOT installed.** It drives a compressor
+  unattended; arming it stays an explicit operator decision, never a side effect
+  of turning on collection. Enforced by a test that greps every written unit.
+
 ## [0.6.0] - 2026-07-14
 
 The full product ([#1](https://github.com/agentculture/sensibo-cli/issues/1)):

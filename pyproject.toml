@@ -1,6 +1,6 @@
 [project]
 name = "sensibo-cli"
-version = "0.6.0"
+version = "0.7.0"
 description = "Agent and CLI for Sensibo smart-AC control at home: discover devices, collect every sensor reading locally (temperature, humidity, air quality), and set up automated conditions that drive the AC (mode, target, fan, schedules, thresholds). Unofficial community tool; Sensibo is a trademark of Sensibo Ltd."
 readme = "README.md"
 license = "Apache-2.0"
