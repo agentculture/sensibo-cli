@@ -45,6 +45,25 @@ LAN protocol — but it exposes only mode and target temperature, with no fan,
 swing, air-quality, or history, and it pairs exclusively to one controller. It is
 not a viable basis for this tool. Details in [`docs/sensibo-api.md`](docs/sensibo-api.md).)
 
+## Scope and boundaries
+
+Three things this project deliberately is and is not, stated plainly so no
+doc, help text, or `learn` output has to be re-read to find them:
+
+- **Cloud transport, always.** As above: Sensibo is cloud-only, there is no
+  LAN-local Sensibo protocol, and "local" in this project always means *where
+  the data lands* (a store you own, queryable offline) — never the wire. The
+  evidence for the cloud-only finding, with sources, lives in
+  [`docs/sensibo-api.md`](docs/sensibo-api.md).
+- **Unofficial community tool.** See the disclaimer at the top of this file —
+  Sensibo is a trademark of Sensibo Ltd, and this project is not affiliated
+  with, endorsed by, or supported by them.
+- **Not a general home-automation platform.** This is not a Home Assistant
+  replacement and it will not grow support for non-Sensibo devices (no Tuya,
+  Broadlink, Tado, Nest, Ecobee, or third-party HomeKit accessories). Every
+  verb reads Sensibo sensors and drives Sensibo ACs only; a rule can combine
+  readings across your Sensibo fleet, but it cannot reach outside it.
+
 ## Quickstart
 
 ```bash
@@ -91,6 +110,8 @@ is a bug.
   and how to add a verb.
 - [`docs/roadmap.md`](docs/roadmap.md) — build order, and which automations run
   in Sensibo's cloud vs. need a daemon alive.
+- [`docs/history.md`](docs/history.md) — the before-state this build started
+  from, anchored to the frame commit.
 - [`docs/skill-sources.md`](docs/skill-sources.md) — vendored-skill provenance.
 - [`CLAUDE.md`](CLAUDE.md) — conventions for working in this repo.
 
