@@ -441,6 +441,47 @@ asleep. Every response carries an
     sensibo timer clear ac1 --apply --json
 """
 
+_WEB = """\
+# sensibo web
+
+Serves the LAN dashboard over stdlib `http.server` (`ThreadingHTTPServer`) —
+zero runtime dependencies, no external assets, no JS framework. Pages and
+`/api/*` JSON endpoints render **entirely from the local sqlite store**
+(`sensibo/store/`): live readings per location (alias > Sensibo room name >
+id), staleness flags, and inline SVG history sparklines. The dashboard works
+with the Sensibo cloud unreachable; only the control form's writes need it.
+
+**Recorded operator decision: reads are open on the LAN, writes are
+token-gated.** A random token is generated on first run and persisted to
+`~/.sensibo/web-token` (mode 600; override with `--token-file`) — the path is
+printed to stderr, the value never is. Control POSTs (`/control`, `/api/set`)
+require the token as a form field or an `X-Sensibo-Token` header, checked
+with a constant-time comparison (`hmac.compare_digest`).
+
+Submitting the control form previews the change — the same zero-write
+dry-run diff as `sensibo set`, through the same `_process_pod` code path — a
+second, explicit confirm submission applies it via `SensiboClient`.
+
+## Verbs
+
+- `sensibo web [--bind ADDR:PORT] [--db PATH] [--token-file PATH]` — serve
+  the dashboard. Binds `0.0.0.0:8323` by default (LAN-reachable).
+
+## Usage
+
+    sensibo web                              # bind 0.0.0.0:8323
+    sensibo web --bind 127.0.0.1:8323         # loopback only
+    sensibo web --db /path/to/sensibo.db --token-file /path/to/token
+    sensibo web --json
+
+## Trust model
+
+Binding `0.0.0.0` (the default) makes **reads** reachable to anyone on the
+LAN — a deliberate decision recorded in the product spec, not an oversight.
+Bind `127.0.0.1` instead if that is unacceptable on your network. Writes
+always require the token regardless of bind address. See `docs/web.md`.
+"""
+
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
     ("sensibo-cli",): _ROOT,
@@ -479,4 +520,5 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("timer", "show"): _TIMER,
     ("timer", "set"): _TIMER,
     ("timer", "clear"): _TIMER,
+    ("web",): _WEB,
 }

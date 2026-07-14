@@ -76,6 +76,7 @@ def _build_parser() -> argparse.ArgumentParser:
     from sensibo.cli._commands import set as _set_cmd
     from sensibo.cli._commands import smartmode as _smartmode_group
     from sensibo.cli._commands import timer as _timer_group
+    from sensibo.cli._commands import web as _web_cmd
     from sensibo.cli._commands import whoami as _whoami_cmd
 
     # prog is the *console command* (`sensibo`), not the dist name (`sensibo-cli`).
@@ -114,6 +115,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _set_cmd.register(sub)
     _smartmode_group.register(sub)
     _timer_group.register(sub)
+    _web_cmd.register(sub)
     # Register your own noun groups here:
     #   from sensibo.cli._commands import my_noun as _my_noun_group
     #   _my_noun_group.register(sub)

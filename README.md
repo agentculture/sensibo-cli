@@ -114,6 +114,9 @@ is a bug.
   and how to add a verb.
 - [`docs/api.md`](docs/api.md) — the Python library surface: `import sensibo`
   with zero CLI/argparse involvement, for bigger apps that connect directly.
+- [`docs/web.md`](docs/web.md) — the LAN dashboard: quickstart, the
+  reads-open/writes-token-gated model, the token file, and the offline
+  property.
 - [`docs/roadmap.md`](docs/roadmap.md) — build order, and which automations run
   in Sensibo's cloud vs. need a daemon alive.
 - [`docs/history.md`](docs/history.md) — the before-state this build started
