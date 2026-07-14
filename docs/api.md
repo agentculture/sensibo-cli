@@ -10,6 +10,11 @@ immediate) that a script must know before it drives a real air conditioner.
 > **Unofficial community tool.** Sensibo is a trademark of Sensibo Ltd. This
 > project is not affiliated with, endorsed by, or supported by them.
 
+Prefer an MCP client (Claude Code, Claude Desktop, ...) over a raw Python
+import? See [`docs/mcp.md`](mcp.md) — `sensibo mcp serve`, behind the
+optional `sensibo-cli[mcp]` extra, exposes the same read/control surface as
+MCP tools instead.
+
 ## Import weight: `import sensibo` stays light
 
 `import sensibo` re-exports `sensibo.api` (the HTTP client, key resolution,
