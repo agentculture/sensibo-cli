@@ -336,6 +336,14 @@ class SensiboClient:
         """``POST /pods/{id}/schedules/``"""
         return self.request("POST", f"/pods/{pod_id}/schedules/", json_body=body)
 
+    def delete_schedule(self, pod_id: str, schedule_id: str) -> object:
+        """``DELETE /pods/{id}/schedules/{schedule_id}/``
+
+        Per-schedule op, trailing slash (``docs/sensibo-api.md``, Endpoints
+        table: "Per-schedule ops at ``/schedules/{schedule_id}/``").
+        """
+        return self.request("DELETE", f"/pods/{pod_id}/schedules/{schedule_id}/")
+
     # -- events ----------------------------------------------------------------
 
     def get_events(self, pod_id: str, limit: int | None = None) -> object:

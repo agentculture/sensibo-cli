@@ -357,6 +357,90 @@ Unknown ids fail with a `hint:` pointing at `sensibo devices`. Read-only.
 - `sensibo explain devices`
 """
 
+_SMARTMODE = """\
+# sensibo smartmode
+
+Climate React — Sensibo's own **server-side** threshold automation. It runs
+inside Sensibo's cloud: once enabled it keeps enforcing its thresholds even
+while this machine (and any local rules engine) is asleep or offline.
+Every response — text and `--json` — carries an `execution: cloud (survives
+local daemon sleeping)` marker so that's never ambiguous.
+
+## Verbs
+
+- `sensibo smartmode show <pod>` — read-only; the current Climate React
+  config (`GET /pods/{id}/smartmode`).
+- `sensibo smartmode enable <pod>` / `disable <pod>` — writes. **Dry-run by
+  default**: prints the current config, the requested change, and does
+  nothing. `--apply` commits (`PUT /pods/{id}/smartmode`).
+- `sensibo smartmode overview` — describe this noun.
+
+## Usage
+
+    sensibo smartmode show ac1
+    sensibo smartmode enable ac1            # dry-run preview only
+    sensibo smartmode enable ac1 --apply    # commits
+    sensibo smartmode disable ac1 --apply --json
+"""
+
+_SCHEDULE = """\
+# sensibo schedule
+
+Recurring **server-side** automation on a pod
+(`/pods/{id}/schedules/` — note the trailing slash; per-schedule ops at
+`/schedules/{schedule_id}/`). Schedules fire from Sensibo's cloud even while
+this machine is asleep. Every response carries an
+`execution: cloud (survives local daemon sleeping)` marker.
+
+## Verbs
+
+- `sensibo schedule list <pod>` — read-only; the schedules on a pod.
+- `sensibo schedule create <pod> --time HH:MM [--days MON,TUE|all]
+  [--state on|off] [--mode ...] [--target-temperature N] [--fan-level ...]
+  [--raw-body JSON]` — write. **Dry-run by default**: shows the existing
+  schedules and the requested new one, and calls nothing. `--apply` commits
+  (`POST /pods/{id}/schedules/`). `--raw-body` overrides the friendly flags
+  with an exact JSON body — Sensibo documents the endpoint, not its request
+  schema.
+- `sensibo schedule delete <pod> <schedule-id>` — write. Dry-run by default;
+  `--apply` commits (`DELETE /pods/{id}/schedules/{schedule-id}/`).
+- `sensibo schedule overview` — describe this noun.
+
+## Usage
+
+    sensibo schedule list ac1
+    sensibo schedule create ac1 --time 22:30 --days MON,TUE,WED   # dry-run
+    sensibo schedule create ac1 --time 22:30 --apply
+    sensibo schedule delete ac1 sched123 --apply --json
+"""
+
+_TIMER = """\
+# sensibo timer
+
+A one-shot **server-side** countdown on a pod (`/pods/{id}/timer/` — note the
+trailing slash). It fires from Sensibo's cloud even while this machine is
+asleep. Every response carries an
+`execution: cloud (survives local daemon sleeping)` marker.
+
+## Verbs
+
+- `sensibo timer show <pod>` — read-only; the current timer state.
+- `sensibo timer set <pod> --minutes N --state on|off [--mode ...]
+  [--target-temperature N] [--fan-level ...] [--raw-body JSON]` — write.
+  **Dry-run by default**: shows the current timer and the requested one, and
+  calls nothing. `--apply` commits (`PUT /pods/{id}/timer/`).
+- `sensibo timer clear <pod>` — write. Dry-run by default; `--apply` commits
+  (`DELETE /pods/{id}/timer/`).
+- `sensibo timer overview` — describe this noun.
+
+## Usage
+
+    sensibo timer show ac1
+    sensibo timer set ac1 --minutes 30 --state off   # dry-run
+    sensibo timer set ac1 --minutes 30 --state off --apply
+    sensibo timer clear ac1 --apply --json
+"""
+
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
     ("sensibo-cli",): _ROOT,
@@ -380,4 +464,19 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("room", "name"): _ROOM_NAME,
     ("devices",): _DEVICES,
     ("read",): _READ,
+    ("smartmode",): _SMARTMODE,
+    ("smartmode", "overview"): _SMARTMODE,
+    ("smartmode", "show"): _SMARTMODE,
+    ("smartmode", "enable"): _SMARTMODE,
+    ("smartmode", "disable"): _SMARTMODE,
+    ("schedule",): _SCHEDULE,
+    ("schedule", "overview"): _SCHEDULE,
+    ("schedule", "list"): _SCHEDULE,
+    ("schedule", "create"): _SCHEDULE,
+    ("schedule", "delete"): _SCHEDULE,
+    ("timer",): _TIMER,
+    ("timer", "overview"): _TIMER,
+    ("timer", "show"): _TIMER,
+    ("timer", "set"): _TIMER,
+    ("timer", "clear"): _TIMER,
 }
