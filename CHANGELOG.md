@@ -5,6 +5,66 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-14
+
+Docs-only release. No runtime code changed — `sensibo/` is untouched, and the CLI
+still ships only its introspection verbs.
+
+### Added
+
+- **`docs/sensibo-api.md`** — the authoritative API reference, and the answer to
+  the build brief's load-bearing question
+  ([#1](https://github.com/agentculture/sensibo-cli/issues/1)). **There is no
+  LAN-local Sensibo API; the devices are cloud-only.** Verified rather than
+  assumed: Home Assistant's integration is `iot_class: cloud_polling`,
+  `pysensibo` contains no local code path, and the official OpenAPI spec declares
+  a single server. So "collect locally" means *the data comes to rest on the
+  operator's machine*, not that the transport is LAN-only — stated plainly so no
+  doc implies a local protocol we don't have. Every claim is tagged
+  CONFIRMED / LIKELY / UNVERIFIED, with the open questions to settle against real
+  hardware listed explicitly. Records the endpoint surface, auth (the API key is
+  a **query parameter** — never log a raw URL), the single-call `fields=*` poll
+  pattern the unpublished-but-tight rate limit forces, and three traps: `pm25` is
+  an AQI enum on Pure but µg/m³ on Elements (silent history corruption), Room
+  Sensor is a BLE satellite and not a pod at all, and CO2 is derived from TVOC
+  rather than measured. Also documents why `pysensibo` is a reference and not a
+  dependency: it requires `aiohttp` (breaking the zero-runtime-dependency design)
+  and doesn't implement `historicalMeasurements` — the one endpoint the retention
+  thesis is built on.
+- **`docs/architecture.md`** — the CLI skeleton, the two rubric-enforced contracts
+  (the `CliError` error contract and the stdout/stderr split), how to add a verb,
+  and where the `api/` / `store/` / `rules/` code will go.
+- **`docs/roadmap.md`** — the build order (`devices` and `read` first), and the
+  honest split between automation that runs in Sensibo's cloud (Climate React,
+  schedules) and automation that needs our daemon alive. An automation that
+  silently stops when a laptop sleeps is worse than no automation, so every rule
+  must state where it runs.
+
+### Changed
+
+- **`CLAUDE.md`** — expanded from the bootstrap seed into a real runtime prompt
+  (`/init`): what the agent is for, the commands, the architecture, the
+  dry-run-by-default mandate for write verbs (this CLI turns on air conditioners),
+  the compressor-safety constraints, and the settled Sensibo API facts.
+- **`README.md`** — rewritten to describe the actual product rather than the
+  template it was cloned from. Leads with the cloud-only finding and what
+  "locally" therefore means.
+
+### Fixed
+
+- **Reconciled the `backend:` claim with what `culture.yaml` actually declares**
+  (the backend-consistency invariant, per the brief). The seed `CLAUDE.md` claimed
+  `backend: claude`; `culture.yaml` in fact declares **`backend: colleague`** with
+  a pinned Qwen model — inherited from `culture-agent-template`, which was
+  promoted to a colleague resident in its 0.3.0. The config is the truth: the mesh
+  resident prompt is **`AGENTS.colleague.md`**, and `CLAUDE.md` is guidance for
+  Claude Code sessions. `doctor` was already green on this (both prompt files are
+  on disk); only the prose was wrong. Corrected in `CLAUDE.md` and documented in
+  `docs/architecture.md`.
+- **`README.md` documented the console script as `sensibo-cli`.** The actual entry
+  point is **`sensibo`** (`sensibo-cli` is the PyPI dist name; `sensibo` is both
+  the import package and the command). Every quickstart line was wrong.
+
 ## [0.4.0] - 2026-06-23
 
 ### Added
