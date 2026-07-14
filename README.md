@@ -108,6 +108,8 @@ is a bug.
   confirmed vs. unverified, rate limits, and the per-model sensor traps.
 - [`docs/architecture.md`](docs/architecture.md) — how the CLI is put together
   and how to add a verb.
+- [`docs/api.md`](docs/api.md) — the Python library surface: `import sensibo`
+  with zero CLI/argparse involvement, for bigger apps that connect directly.
 - [`docs/roadmap.md`](docs/roadmap.md) — build order, and which automations run
   in Sensibo's cloud vs. need a daemon alive.
 - [`docs/history.md`](docs/history.md) — the before-state this build started
