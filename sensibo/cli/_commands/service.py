@@ -79,56 +79,73 @@ def _unit_dir(args: argparse.Namespace) -> Path | None:
 # -- install ----------------------------------------------------------------
 
 
+def _install_warnings_block(plan: InstallPlan) -> list[str]:
+    """The ``warning:`` lines, each followed by a trailing blank — or nothing."""
+    if not plan.warnings:
+        return []
+    return [f"warning: {warning}" for warning in plan.warnings] + [""]
+
+
+def _install_write_and_run_block(plan: InstallPlan, *, applied: bool) -> list[str]:
+    """The 'would write / would run' (or 'wrote / ran') command manifest."""
+    write_verb = "wrote" if applied else "would write"
+    run_verb = "ran" if applied else "would run"
+    lines = [f"{write_verb}:"]
+    lines += [f"  {plan.unit_dir / unit.name}" for unit in plan.units]
+    lines.append(f"{run_verb}:")
+    lines += [f"  {' '.join(command)}" for command in plan.commands]
+    lines.append("")
+    return lines
+
+
+def _install_lingering_line(plan: InstallPlan, *, applied: bool) -> str:
+    """The single ``lingering:`` line — already-enabled, or the will/did-enable note."""
+    if plan.linger_already_enabled:
+        return f"lingering: already enabled for {plan.linger_user}"
+    verb = "enabled" if applied else "would enable"
+    return (
+        f"lingering: {verb} for {plan.linger_user} — without it these units "
+        "would stop at logout instead of running from boot"
+    )
+
+
+def _install_unit_bodies_block(plan: InstallPlan) -> list[str]:
+    """The full unit-file bodies printed under ``--show-units``."""
+    lines: list[str] = []
+    for unit in plan.units:
+        lines.append(f"--- {plan.unit_dir / unit.name} ---")
+        lines.append(unit.content.rstrip("\n"))
+        lines.append("")
+    return lines
+
+
+def _install_footer(*, applied: bool, show_units: bool) -> list[str]:
+    """The closing ``applied:`` line and its follow-up hint."""
+    if applied:
+        return ["applied: yes", "next: sensibo service status"]
+    lines = ["applied: no (dry-run — pass --apply to commit)"]
+    if not show_units:
+        lines.append("tip: --show-units prints the full unit files this would write")
+    return lines
+
+
 def _render_install_text(plan: InstallPlan, *, applied: bool, show_units: bool) -> str:
     lines = ["sensibo service install", _EXECUTION_LINE, ""]
-    for warning in plan.warnings:
-        lines.append(f"warning: {warning}")
-    if plan.warnings:
-        lines.append("")
-
+    lines += _install_warnings_block(plan)
     lines.append(f"exec:     {plan.exec_path}")
     lines.append(f"unit dir: {plan.unit_dir}")
     lines.append("")
-
-    verb = "wrote" if applied else "would write"
-    lines.append(f"{verb}:")
-    for unit in plan.units:
-        lines.append(f"  {plan.unit_dir / unit.name}")
-
-    verb = "ran" if applied else "would run"
-    lines.append(f"{verb}:")
-    for command in plan.commands:
-        lines.append(f"  {' '.join(command)}")
-    lines.append("")
-
-    if plan.linger_already_enabled:
-        lines.append(f"lingering: already enabled for {plan.linger_user}")
-    else:
-        verb = "enabled" if applied else "would enable"
-        lines.append(
-            f"lingering: {verb} for {plan.linger_user} — without it these units "
-            "would stop at logout instead of running from boot"
-        )
+    lines += _install_write_and_run_block(plan, applied=applied)
+    lines.append(_install_lingering_line(plan, applied=applied))
     lines.append(f"note: {_RULE_NOTE}")
     lines.append("")
-
     if show_units:
-        for unit in plan.units:
-            lines.append(f"--- {plan.unit_dir / unit.name} ---")
-            lines.append(unit.content.rstrip("\n"))
-            lines.append("")
-
-    if applied:
-        lines.append("applied: yes")
-        lines.append("next: sensibo service status")
-    else:
-        lines.append("applied: no (dry-run — pass --apply to commit)")
-        if not show_units:
-            lines.append("tip: --show-units prints the full unit files this would write")
+        lines += _install_unit_bodies_block(plan)
+    lines += _install_footer(applied=applied, show_units=show_units)
     return "\n".join(lines)
 
 
-def cmd_install(args: argparse.Namespace) -> int:
+def cmd_install(args: argparse.Namespace) -> None:
     json_mode = bool(getattr(args, "json", False))
     apply = bool(getattr(args, "apply", False))
 
@@ -158,13 +175,12 @@ def cmd_install(args: argparse.Namespace) -> int:
         payload["rule_daemon"] = _RULE_NOTE
         payload[EXECUTION_FIELD] = EXECUTION_SUPERVISED
         emit_result(payload, json_mode=True)
-        return 0
+        return
 
     emit_result(
         _render_install_text(plan, applied=apply, show_units=bool(args.show_units)),
         json_mode=False,
     )
-    return 0
 
 
 # -- uninstall --------------------------------------------------------------
@@ -196,7 +212,7 @@ def _render_uninstall_text(plan: dict[str, object], *, applied: bool) -> str:
     return "\n".join(lines)
 
 
-def cmd_uninstall(args: argparse.Namespace) -> int:
+def cmd_uninstall(args: argparse.Namespace) -> None:
     json_mode = bool(getattr(args, "json", False))
     apply = bool(getattr(args, "apply", False))
 
@@ -219,10 +235,9 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             EXECUTION_FIELD: EXECUTION_SUPERVISED,
         }
         emit_result(payload, json_mode=True)
-        return 0
+        return
 
     emit_result(_render_uninstall_text(plan, applied=apply), json_mode=False)
-    return 0
 
 
 # -- status -----------------------------------------------------------------
@@ -307,7 +322,7 @@ def _render_status_text(state: dict[str, object], store: dict[str, object]) -> s
     return "\n".join(lines)
 
 
-def cmd_status(args: argparse.Namespace) -> int:
+def cmd_status(args: argparse.Namespace) -> None:
     json_mode = bool(getattr(args, "json", False))
 
     try:
@@ -323,10 +338,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         payload["store"] = store
         payload[EXECUTION_FIELD] = EXECUTION_SUPERVISED
         emit_result(payload, json_mode=True)
-        return 0
+        return
 
     emit_result(_render_status_text(state, store), json_mode=False)
-    return 0
 
 
 # -- overview / registration ------------------------------------------------

@@ -132,6 +132,19 @@ def test_a_failing_collector_never_polls_faster_than_a_healthy_one() -> None:
         assert restart >= MIN_INTERVAL
 
 
+def test_collect_restart_sec_rounds_a_fractional_interval_up() -> None:
+    """A fractional interval must round UP, never truncate.
+
+    int(60.5) == 60 would drop the restart delay *below* the poll interval,
+    breaking the invariant that a failing collector never restart-polls faster
+    than it polls. math.ceil keeps RestartSec >= the interval.
+    """
+    assert collect_restart_sec(60.5) == 61
+
+    unit = render_collect_unit(EXEC, interval=60.5)
+    assert "RestartSec=61" in unit.content
+
+
 def test_collector_backs_off_exponentially_on_modern_systemd() -> None:
     """A persistent outage must decay toward a long retry, not pound the API forever."""
     unit = render_collect_unit(EXEC, interval=60, systemd_version=SYSTEMD_BACKOFF_MIN_VERSION)
@@ -256,12 +269,36 @@ def test_install_plan_can_omit_the_web_unit(tmp_path: Path) -> None:
 
 
 def test_install_plan_rejects_installing_nothing(tmp_path: Path) -> None:
+    runner = FakeRunner()
     with pytest.raises(ServiceError) as excinfo:
         build_install_plan(
-            exec_path=EXEC, unit_dir=tmp_path, collect=False, web=False, runner=FakeRunner()
+            exec_path=EXEC, unit_dir=tmp_path, collect=False, web=False, runner=runner
         )
     assert "nothing to install" in excinfo.value.message
     assert excinfo.value.remediation
+
+
+def test_install_plan_does_not_probe_the_system_when_systemd_is_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A dry-run on a non-systemd host must describe its plan, not crash.
+
+    systemd_version / linger_enabled shell out to systemctl / loginctl, which
+    raise FileNotFoundError when systemd is absent. build_install_plan must skip
+    those live reads and still return a plan carrying the 'not available' warning.
+    """
+    from sensibo.service import manager
+
+    monkeypatch.setattr(manager, "systemd_available", lambda: False)
+
+    def exploding_runner(argv: list[str]) -> RunResult:
+        raise AssertionError(f"runner must not be called on a non-systemd host: {argv}")
+
+    plan = build_install_plan(exec_path=EXEC, unit_dir=tmp_path, runner=exploding_runner)
+
+    assert list(tmp_path.iterdir()) == [], "still a dry-run: nothing written"
+    assert plan.linger_already_enabled is False
+    assert any("systemd is not available" in w for w in plan.warnings)
 
 
 # --- apply: the one function allowed to mutate -----------------------------
@@ -332,6 +369,26 @@ def test_apply_uninstall_removes_the_units(tmp_path: Path) -> None:
     assert any("disable --now" in c for c in ran)
 
 
+def test_apply_uninstall_raises_and_keeps_units_when_disable_fails(tmp_path: Path) -> None:
+    """A failed 'disable --now' must abort before any unit file is unlinked.
+
+    Deleting a unit whose disable failed leaves a still-running service with no
+    file behind it, yet the old code reported a clean uninstall. The disable must
+    succeed first — otherwise raise, and leave every unit on disk.
+    """
+    for name in (COLLECT_UNIT, WEB_UNIT, TARGET_UNIT):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+    runner = FakeRunner(fail_on="disable")
+    plan = build_uninstall_plan(unit_dir=tmp_path)
+
+    with pytest.raises(ServiceError) as excinfo:
+        apply_uninstall(plan, runner=runner)
+
+    assert "disable" in excinfo.value.message
+    for name in (COLLECT_UNIT, WEB_UNIT, TARGET_UNIT):
+        assert (tmp_path / name).is_file(), "a failed disable must not delete any unit"
+
+
 def test_uninstall_never_disables_lingering(tmp_path: Path) -> None:
     """The operator may have enabled lingering for something else entirely."""
     (tmp_path / COLLECT_UNIT).write_text("x", encoding="utf-8")
@@ -376,6 +433,7 @@ def test_resolve_exec_path_honours_an_explicit_override(tmp_path: Path) -> None:
 
 
 def test_resolve_exec_path_rejects_a_missing_override(tmp_path: Path) -> None:
+    missing = str(tmp_path / "nope")
     with pytest.raises(ServiceError) as excinfo:
-        resolve_exec_path(str(tmp_path / "nope"))
+        resolve_exec_path(missing)
     assert "does not exist" in excinfo.value.message

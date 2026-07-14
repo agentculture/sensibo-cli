@@ -248,6 +248,14 @@ def build_install_plan(
     target_dir = Path(unit_dir) if unit_dir is not None else DEFAULT_UNIT_DIR
     user = linger_user or current_user()
 
+    # Probe the host once. On a box without systemd, systemctl/loginctl are not
+    # on PATH, and shelling out to them (systemd_version / linger_enabled) would
+    # raise FileNotFoundError — turning a *dry-run* into a crash. The plan is
+    # still fully describable, so guard the live reads: skip them when systemd is
+    # absent and fall back to the safe defaults (no version, not yet lingering).
+    available = systemd_available()
+    detected_version = systemd_version(runner=runner) if available else None
+
     units: list[UnitFile] = []
     enable: list[str] = []
     if collect:
@@ -256,7 +264,7 @@ def build_install_plan(
                 exec_path,
                 interval=interval,
                 db=db,
-                systemd_version=systemd_version(runner=runner),
+                systemd_version=detected_version,
             )
         )
         enable.append(COLLECT_UNIT)
@@ -265,7 +273,7 @@ def build_install_plan(
         enable.append(WEB_UNIT)
     units.append(render_target())
 
-    already_lingering = linger_enabled(user, runner=runner)
+    already_lingering = linger_enabled(user, runner=runner) if available else False
 
     commands: list[tuple[str, ...]] = [("systemctl", "--user", "daemon-reload")]
     if not already_lingering:
@@ -275,7 +283,7 @@ def build_install_plan(
     )
 
     warnings: list[str] = []
-    if not systemd_available():
+    if not available:
         warnings.append(
             "systemd is not available on this host — this plan describes what would "
             "be done, but --apply would fail here"
@@ -375,6 +383,16 @@ def apply_uninstall(plan: dict[str, object], *, runner=default_runner) -> dict[s
     for argv in plan["commands"]:  # type: ignore[union-attr]
         result = runner(list(argv))
         ran.append({"command": list(argv), "returncode": result.returncode})
+        # disable/stop must succeed BEFORE any unit file is unlinked. Deleting a
+        # unit whose 'disable --now' failed leaves a still-running service with no
+        # file behind it — a clean-looking uninstall that removed nothing. Mirror
+        # apply_install: raise on the first non-zero result, before the unlink loop.
+        if not result.ok:
+            raise ServiceError(
+                message=f"command failed ({result.returncode}): {' '.join(argv)}\n"
+                f"{result.stderr.strip()}",
+                remediation=_command_remediation(tuple(argv)),
+            )
 
     for name in plan["remove"]:  # type: ignore[union-attr]
         path = unit_dir / str(name)

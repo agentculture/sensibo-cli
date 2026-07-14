@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-07-15
+
+Review-triage follow-up on the always-on host (PR #5): three reliability bugs
+from qodo and six SonarCloud issues, all in the new `service` code.
+
+### Fixed
+
+- **`collect_restart_sec` no longer truncates a fractional interval.** It used
+  `int(max(...))`, so `--interval 60.5` rendered `RestartSec=60` — below the
+  poll cadence, the exact hazard the floor exists to prevent. Now rounds up
+  with `math.ceil` (60.5 → 61).
+- **Dry-run `service install` no longer crashes on a non-systemd host.**
+  `build_install_plan` probed `systemctl --version` / `loginctl show-user`
+  before checking `systemd_available()`, raising `FileNotFoundError` where the
+  binaries are absent. The probes are now gated behind availability; the plan
+  and its "systemd is not available" warning render either way — honouring the
+  dry-run-must-not-crash contract.
+- **`apply_uninstall` now fails loudly instead of reporting a false success.**
+  It recorded command return codes but never checked them, deleting unit files
+  even when `systemctl --user disable --now` failed. It now mirrors
+  `apply_install`: a non-zero result raises `ServiceError` (with a targeted
+  remediation) *before* any unit file is unlinked.
+
+### Changed
+
+- **`_render_install_text` split into focused helpers** to bring cognitive
+  complexity back under the gate; output is byte-for-byte identical.
+- **`cmd_install` / `cmd_uninstall` / `cmd_status` now return `None`** rather
+  than a constant `0`. The dispatcher already coerces `None` → exit 0, so
+  behaviour is unchanged; this clears three Sonar "always returns the same
+  value" reports. Two exception tests were tightened so only the call under
+  test sits inside `pytest.raises`.
+
 ## [0.7.0] - 2026-07-14
 
 The always-on host — closing the deployment story the spec parked as an open

@@ -36,6 +36,7 @@ starts everything at boot.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -120,8 +121,12 @@ def collect_restart_sec(interval: float) -> int:
     is, by hypothesis, already erroring or rate-limiting us. ``MIN_INTERVAL``
     (60s) is the floor ``sensibo collect`` itself enforces as Sensibo's safe
     polling rate; a restart loop must respect the same floor.
+
+    Rounds **up**: a fractional interval (e.g. 60.5s) must never yield a restart
+    delay *below* the interval, so truncation is wrong — ``math.ceil`` keeps the
+    invariant that the restart delay is never shorter than the poll interval.
     """
-    return int(max(MIN_INTERVAL, interval))
+    return math.ceil(max(MIN_INTERVAL, interval))
 
 
 def render_collect_unit(
