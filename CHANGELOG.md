@@ -5,6 +5,102 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-07-15
+
+Review-triage follow-up on the always-on host (PR #5): three reliability bugs
+from qodo and six SonarCloud issues, all in the new `service` code.
+
+### Fixed
+
+- **`collect_restart_sec` no longer truncates a fractional interval.** It used
+  `int(max(...))`, so `--interval 60.5` rendered `RestartSec=60` — below the
+  poll cadence, the exact hazard the floor exists to prevent. Now rounds up
+  with `math.ceil` (60.5 → 61).
+- **Dry-run `service install` no longer crashes on a non-systemd host.**
+  `build_install_plan` probed `systemctl --version` / `loginctl show-user`
+  before checking `systemd_available()`, raising `FileNotFoundError` where the
+  binaries are absent. The probes are now gated behind availability; the plan
+  and its "systemd is not available" warning render either way — honouring the
+  dry-run-must-not-crash contract.
+- **`apply_uninstall` now fails loudly instead of reporting a false success.**
+  It recorded command return codes but never checked them, deleting unit files
+  even when `systemctl --user disable --now` failed. It now mirrors
+  `apply_install`: a non-zero result raises `ServiceError` (with a targeted
+  remediation) *before* any unit file is unlinked.
+
+### Changed
+
+- **`_render_install_text` split into focused helpers** to bring cognitive
+  complexity back under the gate; output is byte-for-byte identical.
+- **`cmd_install` / `cmd_uninstall` / `cmd_status` now return `None`** rather
+  than a constant `0`. The dispatcher already coerces `None` → exit 0, so
+  behaviour is unchanged; this clears three Sonar "always returns the same
+  value" reports. Two exception tests were tightened so only the call under
+  test sits inside `pytest.raises`.
+
+## [0.7.0] - 2026-07-14
+
+The always-on host — closing the deployment story the spec parked as an open
+follow-up ("Always-on host for the collector and rules daemon: which machine,
+systemd unit, restart policy").
+
+### Added
+
+- **`sensibo/service/`** — systemd **user** unit lifecycle: render, install,
+  status, uninstall. No root, no `/etc`, no `sudo`. Pure plan builders
+  (`build_install_plan`, `build_uninstall_plan`) describe every write and
+  command; `apply_install` / `apply_uninstall` are the only functions that
+  mutate, so the dry-run contract is structural rather than a flag check.
+- **`sensibo service`** — new noun: `install` / `status` / `uninstall` /
+  `overview`. Dry-run by default (`--apply` commits), `--show-units` prints the
+  full unit bodies, `--json` carries the whole inspectable plan.
+  - `sensibo-collect.service` — `collect --daemon`, `Restart=always`.
+    Load-bearing: `collect --daemon` exits (code 2) on any `ApiError` — a cloud
+    blip, or the network not up yet at boot — and systemd is the only thing
+    that brings it back. Sensibo's cloud serves only ~7 days of history, so a
+    gap it fails to recover is permanently lost data.
+    - **`RestartSec` is floored at the collector's own `MIN_INTERVAL` (60s)**,
+      and never dips below the configured `--interval`. Because the daemon
+      *exits* on an `ApiError`, a shorter restart delay would make a **failing**
+      collector hit Sensibo's API **more often than a healthy one** — hammering
+      an API that is by hypothesis already erroring or 429-ing us.
+    - On systemd >= 254, `RestartSteps` / `RestartMaxDelaySec` back a persistent
+      failure off toward 15 minutes. Omitted (not emitted-and-ignored) on older
+      systemd.
+    - **No start limit, deliberately.** `StartLimitBurst` would let the
+      collector give up after a long outage and stay failed — which is precisely
+      the data loss this unit exists to prevent. It retries forever.
+  - `sensibo-web.service` — `web`, `Restart=always`.
+  - `sensibo.target` — groups both, `WantedBy=default.target`.
+  - `loginctl enable-linger` — starts the user manager at **boot**, not at
+    login. Without it the units stop at logout and "always-on" is a lie.
+    `uninstall` never disables it (the operator may rely on it elsewhere).
+- **`sensibo service status`** — per-unit enabled/active, the lingering flag,
+  and **how recently a reading actually landed**: `active` only proves the
+  process runs; the store's freshness is the only proof collection works. The
+  store section prints even when the units are absent, because "you have data
+  and nothing is keeping it fresh" is exactly that operator's problem.
+- **[`docs/deployment.md`](docs/deployment.md)** — the always-on host: why
+  lingering is load-bearing, the API-key trap systemd's `EnvironmentFile=`
+  would introduce, the `--exec-path` venv trap, and reading the journal.
+
+### Changed
+
+- `docs/roadmap.md` — the always-on-host open question is now answered.
+- README — a "keep it running" step in the quickstart, `service` in the verb
+  table, `docs/deployment.md` in the docs index.
+
+### Security
+
+- **No unit file ever names the API key**, and a test enforces it. Unit files
+  in `~/.config/systemd/user/` are world-readable. The key resolves inside the
+  client at runtime (`SENSIBO_API_KEY`, else `~/.sensibo/.env`, mode 600), so
+  systemd never parses the dotenv and never logs the key — which also sidesteps
+  `EnvironmentFile=` silently mangling a shell-style `.env`.
+- **`rule run --daemon` is deliberately NOT installed.** It drives a compressor
+  unattended; arming it stays an explicit operator decision, never a side effect
+  of turning on collection. Enforced by a test that greps every written unit.
+
 ## [0.6.0] - 2026-07-14
 
 The full product ([#1](https://github.com/agentculture/sensibo-cli/issues/1)):

@@ -1,0 +1,439 @@
+"""Tests for :mod:`sensibo.service` — the always-on systemd units.
+
+Two properties matter more than any other here, and they get the most tests:
+
+1. **The dry-run contract is structural.** ``build_install_plan`` must not
+   write a file or run a mutating command, ever — not "must not when a flag is
+   unset", but must not, period. The only function that mutates is
+   ``apply_install``.
+2. **The units must actually be always-on.** ``Restart=always`` and
+   ``WantedBy=default.target`` + lingering are not cosmetic: without them the
+   collector dies on the first cloud blip or at logout, and the ~7-day cloud
+   window turns that gap into permanently lost data.
+
+No test here touches a real systemd: every subprocess call goes through an
+injected fake runner, and every file write is rooted at ``tmp_path``.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from sensibo.collect import MIN_INTERVAL
+from sensibo.service import (
+    COLLECT_UNIT,
+    SYSTEMD_BACKOFF_MIN_VERSION,
+    TARGET_UNIT,
+    WEB_UNIT,
+    RunResult,
+    ServiceError,
+    apply_install,
+    apply_uninstall,
+    build_install_plan,
+    build_uninstall_plan,
+    collect_restart_sec,
+    render_collect_unit,
+    render_target,
+    render_web_unit,
+    resolve_exec_path,
+    status,
+)
+from sensibo.service._units import exec_line
+
+EXEC = "/opt/venv/bin/sensibo"
+
+
+class FakeRunner:
+    """Records argv, returns canned results. Never touches a real systemd."""
+
+    def __init__(
+        self,
+        *,
+        linger: bool = False,
+        fail_on: str | None = None,
+        version: int | None = 255,
+    ) -> None:
+        self.calls: list[list[str]] = []
+        self._linger = linger
+        self._fail_on = fail_on
+        self._version = version
+
+    def __call__(self, argv: list[str]) -> RunResult:
+        self.calls.append(list(argv))
+        joined = " ".join(argv)
+        if self._fail_on and self._fail_on in joined:
+            return RunResult(tuple(argv), returncode=1, stderr="boom")
+        if "--version" in argv:
+            if self._version is None:
+                return RunResult(tuple(argv), returncode=1)
+            return RunResult(
+                tuple(argv),
+                returncode=0,
+                stdout=f"systemd {self._version} ({self._version}.4-1ubuntu8)\n",
+            )
+        if "show-user" in argv:
+            return RunResult(
+                tuple(argv),
+                returncode=0,
+                stdout="Linger=yes\n" if self._linger else "Linger=no\n",
+            )
+        if "is-enabled" in argv:
+            return RunResult(tuple(argv), returncode=0, stdout="enabled\n")
+        if "is-active" in argv:
+            return RunResult(tuple(argv), returncode=0, stdout="active\n")
+        return RunResult(tuple(argv), returncode=0)
+
+
+# --- unit rendering: the always-on properties ------------------------------
+
+
+def test_collect_unit_restarts_always() -> None:
+    """Restart=always is what makes the collector survive an ApiError exit.
+
+    `collect --daemon` exits (code 2) on a cloud blip or a boot-time network
+    race — see sensibo/cli/_commands/collect.py. systemd is the only supervisor
+    that brings it back, and the ~7-day cloud history window means a gap it
+    fails to recover is unrecoverable.
+    """
+    unit = render_collect_unit(EXEC, interval=60)
+    assert "Restart=always" in unit.content
+    assert "RestartSec=" in unit.content
+    assert f"ExecStart={EXEC} collect --daemon --interval 60" in unit.content
+
+
+def test_a_failing_collector_never_polls_faster_than_a_healthy_one() -> None:
+    """The rate-limit hazard, guarded.
+
+    `collect --daemon` exits on any ApiError, so systemd restarts it. If
+    RestartSec were below the poll interval, a FAILING collector would hit
+    Sensibo's API *more often than a healthy one* — hammering an API that is by
+    hypothesis already erroring or 429-ing us. RestartSec must therefore never
+    dip under the cadence, nor under MIN_INTERVAL (the floor `sensibo collect`
+    itself enforces as Sensibo's safe polling rate).
+    """
+    assert collect_restart_sec(60) >= MIN_INTERVAL
+    assert collect_restart_sec(30) >= MIN_INTERVAL, "must not honour a sub-floor interval"
+    assert (
+        collect_restart_sec(300) >= 300
+    ), "a slow poller must not restart-poll faster than it polls"
+
+    for interval in (60, 90, 120, 300, 3600):
+        unit = render_collect_unit(EXEC, interval=interval)
+        restart = int(
+            next(
+                line.split("=", 1)[1]
+                for line in unit.content.splitlines()
+                if line.startswith("RestartSec=")
+            )
+        )
+        assert restart >= interval
+        assert restart >= MIN_INTERVAL
+
+
+def test_collect_restart_sec_rounds_a_fractional_interval_up() -> None:
+    """A fractional interval must round UP, never truncate.
+
+    int(60.5) == 60 would drop the restart delay *below* the poll interval,
+    breaking the invariant that a failing collector never restart-polls faster
+    than it polls. math.ceil keeps RestartSec >= the interval.
+    """
+    assert collect_restart_sec(60.5) == 61
+
+    unit = render_collect_unit(EXEC, interval=60.5)
+    assert "RestartSec=61" in unit.content
+
+
+def test_collector_backs_off_exponentially_on_modern_systemd() -> None:
+    """A persistent outage must decay toward a long retry, not pound the API forever."""
+    unit = render_collect_unit(EXEC, interval=60, systemd_version=SYSTEMD_BACKOFF_MIN_VERSION)
+
+    assert "RestartSteps=" in unit.content
+    assert "RestartMaxDelaySec=" in unit.content
+
+
+def test_collector_omits_backoff_directives_on_older_systemd() -> None:
+    """RestartSteps did not exist before systemd 254 — emitting it there is a lie in a comment."""
+    unit = render_collect_unit(EXEC, interval=60, systemd_version=SYSTEMD_BACKOFF_MIN_VERSION - 1)
+
+    assert "RestartSteps=" not in unit.content
+    assert "RestartMaxDelaySec=" not in unit.content
+    assert "Restart=always" in unit.content, "backoff is a bonus; always-restart is the contract"
+
+
+def test_collector_never_carries_a_start_limit() -> None:
+    """A start limit makes a long outage permanent: the collector gives up and data is lost.
+
+    Restart=always with no StartLimitBurst is deliberate — an all-night internet
+    outage must not leave the collector in a failed state come morning.
+    """
+    unit = render_collect_unit(EXEC, interval=60, systemd_version=255)
+
+    assert "StartLimitBurst" not in unit.content
+    assert "StartLimitIntervalSec" not in unit.content
+
+
+def test_target_is_wanted_by_default_target() -> None:
+    """WantedBy=default.target + lingering is the whole start-at-boot story."""
+    assert "WantedBy=default.target" in render_target().content
+
+
+def test_services_are_wanted_by_and_part_of_the_target() -> None:
+    """WantedBy links them into the target on enable; PartOf stops them with it."""
+    for unit in (
+        render_collect_unit(EXEC, interval=60),
+        render_web_unit(EXEC, bind="0.0.0.0:8323"),
+    ):
+        assert f"WantedBy={TARGET_UNIT}" in unit.content
+        assert f"PartOf={TARGET_UNIT}" in unit.content
+
+
+def test_no_unit_ever_names_the_api_key() -> None:
+    """A unit file is world-readable; the key resolves inside the client instead."""
+    for unit in (
+        render_collect_unit(EXEC, interval=60),
+        render_web_unit(EXEC, bind="0.0.0.0:8323"),
+        render_target(),
+    ):
+        assert "EnvironmentFile" not in unit.content
+        assert "Environment=" not in unit.content
+
+
+def test_collect_unit_carries_db_override_when_given() -> None:
+    unit = render_collect_unit(EXEC, interval=120, db="/srv/sensibo.db")
+    assert f"ExecStart={EXEC} collect --daemon --interval 120 --db /srv/sensibo.db" in unit.content
+
+
+def test_web_unit_carries_bind_and_token_file() -> None:
+    unit = render_web_unit(EXEC, bind="127.0.0.1:9000", token_file="/srv/token")
+    assert f"ExecStart={EXEC} web --bind 127.0.0.1:9000 --token-file /srv/token" in unit.content
+
+
+def test_exec_line_quotes_paths_with_spaces() -> None:
+    """systemd splits ExecStart on whitespace — an unquoted spacey path silently splits."""
+    assert exec_line(["/home/some user/bin/sensibo", "web"]) == '"/home/some user/bin/sensibo" web'
+
+
+# --- the dry-run contract is structural ------------------------------------
+
+
+def test_build_install_plan_writes_nothing(tmp_path: Path) -> None:
+    """The plan builder is pure. Not 'pure unless a flag is set' — pure."""
+    runner = FakeRunner()
+    plan = build_install_plan(exec_path=EXEC, unit_dir=tmp_path, runner=runner)
+
+    assert list(tmp_path.iterdir()) == [], "build_install_plan must not write any file"
+    assert len(plan.units) == 3
+    # The only commands it may run are read-only *queries*: the linger check and
+    # the systemd version probe. Anything else is a mutation and a contract break.
+    for call in runner.calls:
+        assert (
+            "show-user" in call or "--version" in call
+        ), f"plan builder ran a mutating command: {call}"
+
+
+def test_install_plan_enables_linger_when_absent(tmp_path: Path) -> None:
+    plan = build_install_plan(exec_path=EXEC, unit_dir=tmp_path, runner=FakeRunner(linger=False))
+    commands = [" ".join(c) for c in plan.commands]
+
+    assert plan.linger_already_enabled is False
+    assert any(c.startswith("loginctl enable-linger") for c in commands)
+
+
+def test_install_plan_skips_linger_when_already_enabled(tmp_path: Path) -> None:
+    """Re-enabling lingering is harmless but noisy — an honest plan says 'already done'."""
+    plan = build_install_plan(exec_path=EXEC, unit_dir=tmp_path, runner=FakeRunner(linger=True))
+    commands = [" ".join(c) for c in plan.commands]
+
+    assert plan.linger_already_enabled is True
+    assert not any("enable-linger" in c for c in commands)
+
+
+def test_install_plan_enables_every_unit_it_writes(tmp_path: Path) -> None:
+    """`enable sensibo.target` alone does NOT enable its members — each needs enabling."""
+    plan = build_install_plan(exec_path=EXEC, unit_dir=tmp_path, runner=FakeRunner())
+    enable = next(c for c in plan.commands if "enable" in c and "--now" in c)
+
+    assert TARGET_UNIT in enable
+    assert COLLECT_UNIT in enable
+    assert WEB_UNIT in enable
+
+
+def test_install_plan_can_omit_the_web_unit(tmp_path: Path) -> None:
+    plan = build_install_plan(exec_path=EXEC, unit_dir=tmp_path, web=False, runner=FakeRunner())
+    names = [u.name for u in plan.units]
+
+    assert WEB_UNIT not in names
+    assert COLLECT_UNIT in names
+
+
+def test_install_plan_rejects_installing_nothing(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    with pytest.raises(ServiceError) as excinfo:
+        build_install_plan(
+            exec_path=EXEC, unit_dir=tmp_path, collect=False, web=False, runner=runner
+        )
+    assert "nothing to install" in excinfo.value.message
+    assert excinfo.value.remediation
+
+
+def test_install_plan_does_not_probe_the_system_when_systemd_is_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A dry-run on a non-systemd host must describe its plan, not crash.
+
+    systemd_version / linger_enabled shell out to systemctl / loginctl, which
+    raise FileNotFoundError when systemd is absent. build_install_plan must skip
+    those live reads and still return a plan carrying the 'not available' warning.
+    """
+    from sensibo.service import manager
+
+    monkeypatch.setattr(manager, "systemd_available", lambda: False)
+
+    def exploding_runner(argv: list[str]) -> RunResult:
+        raise AssertionError(f"runner must not be called on a non-systemd host: {argv}")
+
+    plan = build_install_plan(exec_path=EXEC, unit_dir=tmp_path, runner=exploding_runner)
+
+    assert list(tmp_path.iterdir()) == [], "still a dry-run: nothing written"
+    assert plan.linger_already_enabled is False
+    assert any("systemd is not available" in w for w in plan.warnings)
+
+
+# --- apply: the one function allowed to mutate -----------------------------
+
+
+def test_apply_install_writes_units_then_runs_commands(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    plan = build_install_plan(exec_path=EXEC, unit_dir=tmp_path, runner=runner)
+    outcome = apply_install(plan, runner=runner)
+
+    written = sorted(p.name for p in tmp_path.iterdir())
+    assert written == sorted([COLLECT_UNIT, TARGET_UNIT, WEB_UNIT])
+    assert len(outcome["written"]) == 3
+
+    ran = [" ".join(c["command"]) for c in outcome["ran"]]  # type: ignore[index]
+    assert ran[0] == "systemctl --user daemon-reload", "daemon-reload must precede enable"
+    assert any("enable-linger" in c for c in ran)
+    assert any(c.startswith("systemctl --user enable --now") for c in ran)
+
+
+def test_apply_install_is_idempotent(tmp_path: Path) -> None:
+    """A reinstall after an upgrade must be safe: rewrite, re-enable, no error."""
+    runner = FakeRunner()
+    plan = build_install_plan(exec_path=EXEC, unit_dir=tmp_path, runner=runner)
+    apply_install(plan, runner=runner)
+    apply_install(plan, runner=runner)
+
+    assert (tmp_path / COLLECT_UNIT).read_text(encoding="utf-8").count("[Service]") == 1
+
+
+def test_apply_install_raises_with_a_remediation_when_a_command_fails(tmp_path: Path) -> None:
+    runner = FakeRunner(fail_on="enable-linger")
+    plan = build_install_plan(exec_path=EXEC, unit_dir=tmp_path, runner=FakeRunner())
+
+    with pytest.raises(ServiceError) as excinfo:
+        apply_install(plan, runner=runner)
+    assert "enable-linger" in excinfo.value.message
+    assert "logged in" in excinfo.value.remediation
+
+
+# --- uninstall -------------------------------------------------------------
+
+
+def test_uninstall_plan_only_lists_units_that_exist(tmp_path: Path) -> None:
+    (tmp_path / COLLECT_UNIT).write_text("x", encoding="utf-8")
+    plan = build_uninstall_plan(unit_dir=tmp_path)
+
+    assert plan["remove"] == [COLLECT_UNIT]
+
+
+def test_uninstall_plan_writes_nothing_and_removes_nothing(tmp_path: Path) -> None:
+    (tmp_path / COLLECT_UNIT).write_text("x", encoding="utf-8")
+    build_uninstall_plan(unit_dir=tmp_path)
+
+    assert (tmp_path / COLLECT_UNIT).is_file(), "the plan builder must not delete anything"
+
+
+def test_apply_uninstall_removes_the_units(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    for name in (COLLECT_UNIT, WEB_UNIT, TARGET_UNIT):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+
+    outcome = apply_uninstall(build_uninstall_plan(unit_dir=tmp_path), runner=runner)
+
+    assert list(tmp_path.iterdir()) == []
+    assert len(outcome["removed"]) == 3
+    ran = [" ".join(c["command"]) for c in outcome["ran"]]  # type: ignore[index]
+    assert any("disable --now" in c for c in ran)
+
+
+def test_apply_uninstall_raises_and_keeps_units_when_disable_fails(tmp_path: Path) -> None:
+    """A failed 'disable --now' must abort before any unit file is unlinked.
+
+    Deleting a unit whose disable failed leaves a still-running service with no
+    file behind it, yet the old code reported a clean uninstall. The disable must
+    succeed first — otherwise raise, and leave every unit on disk.
+    """
+    for name in (COLLECT_UNIT, WEB_UNIT, TARGET_UNIT):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+    runner = FakeRunner(fail_on="disable")
+    plan = build_uninstall_plan(unit_dir=tmp_path)
+
+    with pytest.raises(ServiceError) as excinfo:
+        apply_uninstall(plan, runner=runner)
+
+    assert "disable" in excinfo.value.message
+    for name in (COLLECT_UNIT, WEB_UNIT, TARGET_UNIT):
+        assert (tmp_path / name).is_file(), "a failed disable must not delete any unit"
+
+
+def test_uninstall_never_disables_lingering(tmp_path: Path) -> None:
+    """The operator may have enabled lingering for something else entirely."""
+    (tmp_path / COLLECT_UNIT).write_text("x", encoding="utf-8")
+    plan = build_uninstall_plan(unit_dir=tmp_path)
+
+    for command in plan["commands"]:  # type: ignore[union-attr]
+        assert "linger" not in " ".join(command)
+
+
+# --- status ----------------------------------------------------------------
+
+
+def test_status_reports_not_installed_on_an_empty_unit_dir(tmp_path: Path) -> None:
+    state = status(unit_dir=tmp_path, runner=FakeRunner(), user="someone")
+
+    assert state["installed"] is False
+    assert all(u["installed"] is False for u in state["units"])  # type: ignore[union-attr]
+
+
+def test_status_reports_enabled_active_and_linger(tmp_path: Path) -> None:
+    for name in (COLLECT_UNIT, WEB_UNIT, TARGET_UNIT):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+
+    state = status(unit_dir=tmp_path, runner=FakeRunner(linger=True), user="someone")
+
+    assert state["installed"] is True
+    assert state["linger"] is True
+    units = state["units"]  # type: ignore[union-attr]
+    collect = next(u for u in units if u["unit"] == COLLECT_UNIT)
+    assert collect["enabled"] == "enabled"
+    assert collect["active"] == "active"
+
+
+# --- exec path resolution --------------------------------------------------
+
+
+def test_resolve_exec_path_honours_an_explicit_override(tmp_path: Path) -> None:
+    script = tmp_path / "sensibo"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert resolve_exec_path(str(script)) == str(script.resolve())
+
+
+def test_resolve_exec_path_rejects_a_missing_override(tmp_path: Path) -> None:
+    missing = str(tmp_path / "nope")
+    with pytest.raises(ServiceError) as excinfo:
+        resolve_exec_path(missing)
+    assert "does not exist" in excinfo.value.message
