@@ -27,12 +27,15 @@ from sensibo.service import COLLECT_UNIT, TARGET_UNIT, WEB_UNIT, RunResult
 
 
 class FakeRunner:
-    def __init__(self, *, linger: bool = False) -> None:
+    def __init__(self, *, linger: bool = False, version: int = 255) -> None:
         self.calls: list[list[str]] = []
         self._linger = linger
+        self._version = version
 
     def __call__(self, argv: list[str]) -> RunResult:
         self.calls.append(list(argv))
+        if "--version" in argv:
+            return RunResult(tuple(argv), returncode=0, stdout=f"systemd {self._version} (x)\n")
         if "show-user" in argv:
             return RunResult(
                 tuple(argv),
@@ -71,8 +74,10 @@ def test_install_without_apply_writes_nothing(
     assert "applied: no (dry-run — pass --apply to commit)" in out
     assert "would write:" in out
     assert "would run:" in out
+    # A dry-run may only *query*: the linger check and the systemd version probe.
+    # Any other command is a mutation, and a break of the write-verb contract.
     for call in fake_systemd.calls:
-        assert "show-user" in call, f"dry-run ran a mutating command: {call}"
+        assert "show-user" in call or "--version" in call, f"dry-run ran a mutating command: {call}"
 
 
 def test_install_dry_run_names_every_file_and_command(

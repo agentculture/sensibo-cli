@@ -21,8 +21,10 @@ from pathlib import Path
 
 import pytest
 
+from sensibo.collect import MIN_INTERVAL
 from sensibo.service import (
     COLLECT_UNIT,
+    SYSTEMD_BACKOFF_MIN_VERSION,
     TARGET_UNIT,
     WEB_UNIT,
     RunResult,
@@ -31,6 +33,7 @@ from sensibo.service import (
     apply_uninstall,
     build_install_plan,
     build_uninstall_plan,
+    collect_restart_sec,
     render_collect_unit,
     render_target,
     render_web_unit,
@@ -45,16 +48,31 @@ EXEC = "/opt/venv/bin/sensibo"
 class FakeRunner:
     """Records argv, returns canned results. Never touches a real systemd."""
 
-    def __init__(self, *, linger: bool = False, fail_on: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        linger: bool = False,
+        fail_on: str | None = None,
+        version: int | None = 255,
+    ) -> None:
         self.calls: list[list[str]] = []
         self._linger = linger
         self._fail_on = fail_on
+        self._version = version
 
     def __call__(self, argv: list[str]) -> RunResult:
         self.calls.append(list(argv))
         joined = " ".join(argv)
         if self._fail_on and self._fail_on in joined:
             return RunResult(tuple(argv), returncode=1, stderr="boom")
+        if "--version" in argv:
+            if self._version is None:
+                return RunResult(tuple(argv), returncode=1)
+            return RunResult(
+                tuple(argv),
+                returncode=0,
+                stdout=f"systemd {self._version} ({self._version}.4-1ubuntu8)\n",
+            )
         if "show-user" in argv:
             return RunResult(
                 tuple(argv),
@@ -83,6 +101,64 @@ def test_collect_unit_restarts_always() -> None:
     assert "Restart=always" in unit.content
     assert "RestartSec=" in unit.content
     assert f"ExecStart={EXEC} collect --daemon --interval 60" in unit.content
+
+
+def test_a_failing_collector_never_polls_faster_than_a_healthy_one() -> None:
+    """The rate-limit hazard, guarded.
+
+    `collect --daemon` exits on any ApiError, so systemd restarts it. If
+    RestartSec were below the poll interval, a FAILING collector would hit
+    Sensibo's API *more often than a healthy one* — hammering an API that is by
+    hypothesis already erroring or 429-ing us. RestartSec must therefore never
+    dip under the cadence, nor under MIN_INTERVAL (the floor `sensibo collect`
+    itself enforces as Sensibo's safe polling rate).
+    """
+    assert collect_restart_sec(60) >= MIN_INTERVAL
+    assert collect_restart_sec(30) >= MIN_INTERVAL, "must not honour a sub-floor interval"
+    assert (
+        collect_restart_sec(300) >= 300
+    ), "a slow poller must not restart-poll faster than it polls"
+
+    for interval in (60, 90, 120, 300, 3600):
+        unit = render_collect_unit(EXEC, interval=interval)
+        restart = int(
+            next(
+                line.split("=", 1)[1]
+                for line in unit.content.splitlines()
+                if line.startswith("RestartSec=")
+            )
+        )
+        assert restart >= interval
+        assert restart >= MIN_INTERVAL
+
+
+def test_collector_backs_off_exponentially_on_modern_systemd() -> None:
+    """A persistent outage must decay toward a long retry, not pound the API forever."""
+    unit = render_collect_unit(EXEC, interval=60, systemd_version=SYSTEMD_BACKOFF_MIN_VERSION)
+
+    assert "RestartSteps=" in unit.content
+    assert "RestartMaxDelaySec=" in unit.content
+
+
+def test_collector_omits_backoff_directives_on_older_systemd() -> None:
+    """RestartSteps did not exist before systemd 254 — emitting it there is a lie in a comment."""
+    unit = render_collect_unit(EXEC, interval=60, systemd_version=SYSTEMD_BACKOFF_MIN_VERSION - 1)
+
+    assert "RestartSteps=" not in unit.content
+    assert "RestartMaxDelaySec=" not in unit.content
+    assert "Restart=always" in unit.content, "backoff is a bonus; always-restart is the contract"
+
+
+def test_collector_never_carries_a_start_limit() -> None:
+    """A start limit makes a long outage permanent: the collector gives up and data is lost.
+
+    Restart=always with no StartLimitBurst is deliberate — an all-night internet
+    outage must not leave the collector in a failed state come morning.
+    """
+    unit = render_collect_unit(EXEC, interval=60, systemd_version=255)
+
+    assert "StartLimitBurst" not in unit.content
+    assert "StartLimitIntervalSec" not in unit.content
 
 
 def test_target_is_wanted_by_default_target() -> None:
@@ -136,9 +212,12 @@ def test_build_install_plan_writes_nothing(tmp_path: Path) -> None:
 
     assert list(tmp_path.iterdir()) == [], "build_install_plan must not write any file"
     assert len(plan.units) == 3
-    # The only command it is allowed to run is the read-only linger *query*.
+    # The only commands it may run are read-only *queries*: the linger check and
+    # the systemd version probe. Anything else is a mutation and a contract break.
     for call in runner.calls:
-        assert "show-user" in call, f"plan builder ran a mutating command: {call}"
+        assert (
+            "show-user" in call or "--version" in call
+        ), f"plan builder ran a mutating command: {call}"
 
 
 def test_install_plan_enables_linger_when_absent(tmp_path: Path) -> None:

@@ -36,9 +36,11 @@ from ._errors import ServiceError
 from ._units import (
     COLLECT_UNIT,
     DEFAULT_UNIT_DIR,
+    SYSTEMD_BACKOFF_MIN_VERSION,
     TARGET_UNIT,
     WEB_UNIT,
     UnitFile,
+    collect_restart_sec,
     render_collect_unit,
     render_target,
     render_web_unit,
@@ -58,6 +60,7 @@ from .manager import (
     resolve_exec_path,
     status,
     systemd_available,
+    systemd_version,
 )
 
 __all__ = [
@@ -84,4 +87,7 @@ __all__ = [
     "render_collect_unit",
     "render_web_unit",
     "render_target",
+    "collect_restart_sec",
+    "systemd_version",
+    "SYSTEMD_BACKOFF_MIN_VERSION",
 ]

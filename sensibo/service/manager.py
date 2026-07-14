@@ -164,6 +164,22 @@ def resolve_exec_path(override: str | None = None) -> str:
     )
 
 
+def systemd_version(*, runner=default_runner) -> int | None:
+    """The major systemd version, or ``None`` if it cannot be determined.
+
+    Read-only. Used to decide whether the collector unit may carry
+    ``RestartSteps`` / ``RestartMaxDelaySec`` (systemd >= 254). ``systemctl
+    --version`` prints e.g. ``systemd 255 (255.4-1ubuntu8.12)``.
+    """
+    result = runner(["systemctl", "--version"])
+    if not result.ok:
+        return None
+    for token in result.stdout.split():
+        if token.isdigit():
+            return int(token)
+    return None
+
+
 def linger_enabled(user: str, *, runner=default_runner) -> bool:
     """Is systemd lingering already on for ``user``?
 
@@ -235,7 +251,14 @@ def build_install_plan(
     units: list[UnitFile] = []
     enable: list[str] = []
     if collect:
-        units.append(render_collect_unit(exec_path, interval=interval, db=db))
+        units.append(
+            render_collect_unit(
+                exec_path,
+                interval=interval,
+                db=db,
+                systemd_version=systemd_version(runner=runner),
+            )
+        )
         enable.append(COLLECT_UNIT)
     if web:
         units.append(render_web_unit(exec_path, bind=bind, db=db, token_file=token_file))

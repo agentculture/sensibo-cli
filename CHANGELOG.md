@@ -26,6 +26,17 @@ systemd unit, restart policy").
     blip, or the network not up yet at boot — and systemd is the only thing
     that brings it back. Sensibo's cloud serves only ~7 days of history, so a
     gap it fails to recover is permanently lost data.
+    - **`RestartSec` is floored at the collector's own `MIN_INTERVAL` (60s)**,
+      and never dips below the configured `--interval`. Because the daemon
+      *exits* on an `ApiError`, a shorter restart delay would make a **failing**
+      collector hit Sensibo's API **more often than a healthy one** — hammering
+      an API that is by hypothesis already erroring or 429-ing us.
+    - On systemd >= 254, `RestartSteps` / `RestartMaxDelaySec` back a persistent
+      failure off toward 15 minutes. Omitted (not emitted-and-ignored) on older
+      systemd.
+    - **No start limit, deliberately.** `StartLimitBurst` would let the
+      collector give up after a long outage and stay failed — which is precisely
+      the data loss this unit exists to prevent. It retries forever.
   - `sensibo-web.service` — `web`, `Restart=always`.
   - `sensibo.target` — groups both, `WantedBy=default.target`.
   - `loginctl enable-linger` — starts the user manager at **boot**, not at

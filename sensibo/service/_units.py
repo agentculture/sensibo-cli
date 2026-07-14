@@ -39,6 +39,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from sensibo.collect import MIN_INTERVAL
+
 #: Where systemd looks for a user's own units.
 DEFAULT_UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
 
@@ -46,11 +48,21 @@ TARGET_UNIT = "sensibo.target"
 COLLECT_UNIT = "sensibo-collect.service"
 WEB_UNIT = "sensibo-web.service"
 
-#: Restart backoff, seconds. The collector's is longer because the failure it
-#: recovers from is usually "the cloud/network isn't there yet", which a
-#: tight retry loop cannot fix and would only rate-limit us for.
-_COLLECT_RESTART_SEC = 30
+#: The dashboard makes no cloud calls on its read path, so a tight restart is free.
 _WEB_RESTART_SEC = 5
+
+#: Exponential restart backoff for the collector, for systemd >= 254 only
+#: (``RestartSteps`` / ``RestartMaxDelaySec`` did not exist before that).
+#: Ceiling deliberately well above a poll interval: during a *long* cloud outage
+#: there is nothing to collect anyway, so retrying every 15 minutes rather than
+#: every minute costs no data and stops us pounding an API that is already
+#: refusing us. `collect` backfills what the cloud still holds on the next
+#: successful cycle, so a late recovery self-heals.
+_RESTART_MAX_DELAY_SEC = 900
+_RESTART_STEPS = 5
+
+#: First systemd release with RestartSteps/RestartMaxDelaySec.
+SYSTEMD_BACKOFF_MIN_VERSION = 254
 
 _DOC_URL = "https://github.com/agentculture/sensibo-cli/blob/main/docs/deployment.md"
 
@@ -97,11 +109,27 @@ WantedBy=default.target
     return UnitFile(TARGET_UNIT, content)
 
 
+def collect_restart_sec(interval: float) -> int:
+    """How long to wait before restarting a collector that just died.
+
+    **Never shorter than the poll interval, and never below ``MIN_INTERVAL``.**
+    This is the whole point of the function, and getting it wrong is a live
+    rate-limit hazard: ``collect --daemon`` exits on any ``ApiError``, so a
+    restart delay *below* the poll cadence would make a **failing** collector
+    hit Sensibo's API **more often than a healthy one** — hammering an API that
+    is, by hypothesis, already erroring or rate-limiting us. ``MIN_INTERVAL``
+    (60s) is the floor ``sensibo collect`` itself enforces as Sensibo's safe
+    polling rate; a restart loop must respect the same floor.
+    """
+    return int(max(MIN_INTERVAL, interval))
+
+
 def render_collect_unit(
     exec_path: str,
     *,
     interval: float,
     db: str | None = None,
+    systemd_version: int | None = None,
 ) -> UnitFile:
     """The collector: poll the fleet on a cadence, persist into the local store.
 
@@ -111,10 +139,27 @@ def render_collect_unit(
     the key in a unit file, and never logs it. A dotenv written for a shell
     (``export K=v``, quoted values) is not systemd's ``EnvironmentFile``
     format anyway; letting the client own the parse avoids that trap entirely.
+
+    ``systemd_version``, when >= :data:`SYSTEMD_BACKOFF_MIN_VERSION`, adds
+    exponential restart backoff. Omitted on older systemd rather than emitted
+    and ignored — an unknown directive is only a journal warning, but a unit
+    that lies about its own restart policy is worse than one that is plain.
     """
     argv = [exec_path, "collect", "--daemon", "--interval", f"{interval:g}"]
     if db:
         argv += ["--db", db]
+
+    restart_sec = collect_restart_sec(interval)
+    backoff = ""
+    if systemd_version is not None and systemd_version >= SYSTEMD_BACKOFF_MIN_VERSION:
+        backoff = (
+            f"# Exponential backoff (systemd >= {SYSTEMD_BACKOFF_MIN_VERSION}): a persistent\n"
+            f"# failure (cloud down, 429s) backs off toward {_RESTART_MAX_DELAY_SEC}s instead of\n"
+            f"# retrying at {restart_sec}s forever. It never gives up — giving up loses data.\n"
+            f"RestartSteps={_RESTART_STEPS}\n"
+            f"RestartMaxDelaySec={_RESTART_MAX_DELAY_SEC}\n"
+        )
+
     content = f"""\
 # Managed by `sensibo service install`. Edits are overwritten on reinstall.
 [Unit]
@@ -128,9 +173,15 @@ ExecStart={exec_line(argv)}
 # The daemon exits (code 2) on an ApiError — a cloud blip, or the network not
 # being up yet at boot. systemd is what makes collection survive that; the
 # ~7-day cloud history window means a gap it does not recover is lost forever.
+#
+# Restart=always, never a start limit: a start limit would stop retrying after a
+# long outage, and a collector that has given up is exactly the failure this
+# whole unit exists to prevent. RestartSec is floored at the collector's own
+# MIN_INTERVAL ({int(MIN_INTERVAL)}s) so a FAILING collector can never poll the API
+# faster than a healthy one.
 Restart=always
-RestartSec={_COLLECT_RESTART_SEC}
-# The API key is resolved by the client (SENSIBO_API_KEY, else ~/.sensibo/.env).
+RestartSec={restart_sec}
+{backoff}# The API key is resolved by the client (SENSIBO_API_KEY, else ~/.sensibo/.env).
 # It is deliberately NOT named here: a unit file is world-readable.
 
 [Install]
