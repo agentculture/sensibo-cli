@@ -213,6 +213,29 @@ def test_cycle_records_room_sensor_from_motion_sensors(tmp_path) -> None:
         assert latest["battery"].unit == "%"
 
 
+def test_cycle_readings_written_counts_room_sensor_fields_too(tmp_path) -> None:
+    """Qodo 3581287844: Room Sensor readings were written but never counted.
+
+    ``_record_room_sensors`` used to discard the return value of
+    ``_record_measurements``, so a fleet with Room Sensors under-reported
+    ``readings_written`` even though every field landed in the store.
+    """
+    client = _FakeClient(_snapshot(_airpro_pod()))
+    with Store(db_path=tmp_path / "s.db") as store:
+        result, _pods = Collector(client, store).run_cycle()
+
+        # pod-airpro's measurements minus "time": temperature, humidity, co2,
+        # tvoc, roomIsOccupied = 5 fields.
+        pod_fields = len(store.latest_readings("pod-airpro"))
+        # ms_kitchen01's measurements minus "time": temperature, humidity,
+        # motion, battery = 4 fields.
+        room_fields = len(store.latest_readings("ms_kitchen01"))
+
+    assert pod_fields == 5
+    assert room_fields == 4
+    assert result.readings_written == pod_fields + room_fields == 9
+
+
 # --- pm25 polymorphism: the trap ------------------------------------------
 
 
