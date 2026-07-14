@@ -150,7 +150,11 @@ class Collector:
             readings += self._record_measurements(
                 pod_id, pod.get("measurements"), product_model, wall
             )
-            room_count += self._record_room_sensors(pod_id, pod.get("motionSensors"), wall)
+            sensors_seen, sensor_readings = self._record_room_sensors(
+                pod_id, pod.get("motionSensors"), wall
+            )
+            room_count += sensors_seen
+            readings += sensor_readings
 
         result = CycleResult(
             locations_seen=pod_count + room_count,
@@ -160,11 +164,20 @@ class Collector:
         )
         return result, pods
 
-    def _record_room_sensors(self, parent_pod_id: str, motion_sensors: Any, wall: float) -> int:
-        """Persist each Room Sensor nested under a parent pod. Returns the count."""
+    def _record_room_sensors(
+        self, parent_pod_id: str, motion_sensors: Any, wall: float
+    ) -> tuple[int, int]:
+        """Persist each Room Sensor nested under a parent pod.
+
+        Returns ``(sensor_count, readings_written)`` — Qodo 3581287844 flagged
+        that the readings count used to be discarded here, so a Room Sensor's
+        fields landed in the store but never showed up in
+        ``CycleResult.readings_written``.
+        """
         if not isinstance(motion_sensors, Sequence) or isinstance(motion_sensors, (str, bytes)):
-            return 0
+            return 0, 0
         count = 0
+        readings = 0
         for sensor in motion_sensors:
             if not isinstance(sensor, Mapping):
                 continue
@@ -180,9 +193,11 @@ class Collector:
                 room_name=_room_name(sensor),
                 seen_at=_seen_at(sensor.get("measurements"), wall),
             )
-            self._record_measurements(sensor_id, sensor.get("measurements"), model, wall)
+            readings += self._record_measurements(
+                sensor_id, sensor.get("measurements"), model, wall
+            )
             count += 1
-        return count
+        return count, readings
 
     def _record_measurements(
         self, location_id: str, measurements: Any, product_model: str | None, wall: float
