@@ -70,6 +70,41 @@ def test_mixed_numeric_and_non_numeric_only_charts_the_numeric_ones() -> None:
     assert len(_points(svg)) == 2
 
 
+# --- bounded point count / downsampling (Qodo review 3581287838) -----------
+
+
+def test_downsampling_caps_points_and_preserves_first_and_last() -> None:
+    readings = [_reading(float(i), float(i)) for i in range(1000)]
+    svg = render_sparkline(readings, max_points=300)
+    points = _points(svg)
+    assert len(points) <= 300
+    # The aria-label is built from the (already downsampled) values list's
+    # first/last entries -- proof downsampling doesn't shift the visible
+    # start/end of the series.
+    assert "0 to 999" in svg
+
+
+def test_default_max_points_bounds_a_large_series_without_explicit_override() -> None:
+    from sensibo.web._svg import DEFAULT_MAX_POINTS
+
+    readings = [_reading(float(i), float(i)) for i in range(DEFAULT_MAX_POINTS * 4)]
+    svg = render_sparkline(readings)
+    assert len(_points(svg)) <= DEFAULT_MAX_POINTS
+
+
+def test_downsampling_is_a_noop_when_already_under_the_cap() -> None:
+    readings = [_reading(float(i), float(i)) for i in range(10)]
+    svg = render_sparkline(readings, max_points=300)
+    assert len(_points(svg)) == 10
+
+
+def test_downsampling_never_exceeds_max_points_at_various_series_lengths() -> None:
+    for n in (1, 2, 299, 300, 301, 500, 2000):
+        readings = [_reading(float(i), float(i)) for i in range(n)]
+        svg = render_sparkline(readings, max_points=300)
+        assert len(_points(svg)) <= 300
+
+
 def test_svg_has_no_script_tag_or_cdn_reference() -> None:
     # The `xmlns="http://www.w3.org/2000/svg"` namespace URI is a standard,
     # never-fetched identifier (not a network reference) — deliberately not

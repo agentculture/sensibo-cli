@@ -15,7 +15,8 @@ Path                    Method  What
                                  and (pods only) the control form
 ``/api/locations``      GET     JSON: every location (mirrors ``sensibo query locations``)
 ``/api/latest``         GET     JSON: latest reading(s) (``?location=&field=``)
-``/api/history``        GET     JSON: a field's time series (``?location=&field=``)
+``/api/history``        GET     JSON: a field's time series, bounded (``?location=&field=``
+                                 ``[&since=][&until=][&limit=]``, default limit 1000)
 ``/control``            POST    HTML control result (dry-run, or applied with ``confirm``)
 ``/api/set``            POST    JSON control result, same token/confirm contract
 ======================  ======  ====================================================
@@ -39,11 +40,39 @@ what counts as "a write". Same for ``_FLAG_TO_FIELD``, the flag-name ->
 ``token`` form field or the ``X-Sensibo-Token`` header, checked with
 :func:`sensibo.web._token.check_token` (constant-time). GET endpoints never
 check it — the recorded operator decision is reads open, writes gated.
+
+**Bounded reads (Qodo review 3581287838).** Before this fix,
+``/location/<id>`` fetched a field's *entire* time series
+(``Store.query_range`` with no bound) and rendered one SVG point per
+reading — after months of ~90s-cadence collection a single page load could
+trace a polyline with tens of thousands of points. Now:
+
+* The location page requests a bounded lookback window
+  (:data:`_HISTORY_WINDOW_SECONDS`, default 24h) capped at
+  :data:`_HISTORY_FETCH_LIMIT` rows per field — both applied SQL-side via
+  ``Store.query_range``'s ``limit`` (an inner ``ORDER BY timestamp DESC
+  LIMIT ?``, never a Python fetchall-then-slice).
+* :func:`sensibo.web._svg.render_sparkline` additionally downsamples evenly
+  to at most :data:`sensibo.web._svg.DEFAULT_MAX_POINTS` points per chart.
+* ``/api/history`` takes explicit ``since``/``until``/``limit`` query
+  params, defaulting to :data:`_DEFAULT_API_HISTORY_LIMIT` readings and
+  capped at :data:`_MAX_API_HISTORY_LIMIT` regardless of what a caller asks
+  for. The applied ``limit`` is echoed back in the JSON payload.
+
+**Bounded POST bodies (Qodo review 3581287840).** This server binds
+``0.0.0.0`` by default (:data:`DEFAULT_BIND_HOST`), and ``Content-Length`` is
+read *before* the write token is ever checked — so, before this fix, any LAN
+client (not just an authenticated one) could force unbounded memory use by
+claiming an enormous ``Content-Length``. ``do_POST`` now validates the
+header before reading a single byte: missing -> ``411``, non-integer or
+negative -> ``400``, larger than :data:`MAX_POST_BYTES` -> ``413`` (returned
+without ever calling ``rfile.read``).
 """
 
 from __future__ import annotations
 
 import json as _json
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
@@ -68,6 +97,30 @@ DEFAULT_BIND_PORT = 8323
 
 _CONTROL_FIELDS = ("power", "mode", "target", "fan", "swing")
 _TRUTHY = {"1", "true", "yes", "on"}
+
+#: Default lookback window for the location page's history sparklines
+#: (Qodo 3581287838) — recent history, not the store's entire retention
+#: window (which defaults to two years, per ``sensibo.store.store``).
+_HISTORY_WINDOW_SECONDS = 24 * 60 * 60  # 24h
+
+#: Belt-and-braces SQL-side cap on rows fetched per field for the location
+#: page, on top of the window above — protects a single page load even if a
+#: pod's collection cadence is far tighter than the ~90s norm.
+_HISTORY_FETCH_LIMIT = 2000
+
+#: `/api/history`'s default `?limit=` when the caller doesn't pass one.
+_DEFAULT_API_HISTORY_LIMIT = 1000
+
+#: Hard ceiling on `/api/history`'s `?limit=`, regardless of what a caller
+#: asks for — same rationale as `_HISTORY_FETCH_LIMIT`.
+_MAX_API_HISTORY_LIMIT = 10_000
+
+#: Hard cap on a POST body's size (Qodo 3581287840). This server binds
+#: `0.0.0.0` by default (`DEFAULT_BIND_HOST`), and `Content-Length` is
+#: validated before the write token is ever checked, so any LAN client —
+#: authenticated or not — must never be able to force unbounded memory use
+#: by claiming an enormous `Content-Length`.
+MAX_POST_BYTES = 64 * 1024
 
 
 def _truthy(value: object) -> bool:
@@ -177,7 +230,13 @@ class _Handler(BaseHTTPRequestHandler):
             if loc is None:
                 raise _NotFound(f"unknown location: {location_id}")
             latest = store.latest_readings(loc.id)
-            history = {field: store.query_range(loc.id, field) for field in latest}
+            # Bounded lookback window + SQL-side row cap (Qodo 3581287838):
+            # never fetch a field's entire history to render one page.
+            since = time.time() - _HISTORY_WINDOW_SECONDS
+            history = {
+                field: store.query_range(loc.id, field, since=since, limit=_HISTORY_FETCH_LIMIT)
+                for field in latest
+            }
         body = _render.render_location(
             loc, latest, history, stale_after_hours=self.server.stale_after_hours
         )
@@ -222,20 +281,40 @@ class _Handler(BaseHTTPRequestHandler):
         if not location_id or not field:
             self._send_text(400, "both ?location= and ?field= are required\n")
             return
-        since = float(query["since"]) if query.get("since") else None
-        until = float(query["until"]) if query.get("until") else None
+        try:
+            since = float(query["since"]) if query.get("since") else None
+            until = float(query["until"]) if query.get("until") else None
+        except ValueError:
+            self._send_text(400, "?since= and ?until= must be numeric epoch seconds\n")
+            return
+
+        # Bounded by default (Qodo 3581287838): a caller gets at most
+        # `_DEFAULT_API_HISTORY_LIMIT` readings unless it explicitly asks
+        # for a different `?limit=`, itself capped at `_MAX_API_HISTORY_LIMIT`.
+        limit = _DEFAULT_API_HISTORY_LIMIT
+        if query.get("limit"):
+            try:
+                limit = int(query["limit"])
+            except ValueError:
+                self._send_text(400, "?limit= must be an integer\n")
+                return
+            if limit <= 0:
+                self._send_text(400, "?limit= must be a positive integer\n")
+                return
+            limit = min(limit, _MAX_API_HISTORY_LIMIT)
 
         with Store(db_path=self.server.db_path) as store:
             loc = store.get_location(location_id)
             if loc is None:
                 raise _NotFound(f"unknown location: {location_id}")
-            readings = store.query_range(loc.id, field, since=since, until=until)
+            readings = store.query_range(loc.id, field, since=since, until=until, limit=limit)
 
         self._send_json(
             200,
             {
                 "location_id": location_id,
                 "field": field,
+                "limit": limit,
                 "readings": [reading_to_dict(r) for r in readings],
             },
         )
@@ -245,7 +324,27 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - stdlib method name
         parsed = urlparse(self.path)
         path = parsed.path
-        length = int(self.headers.get("Content-Length") or 0)
+
+        # Content-Length must be validated *before* a single byte is read
+        # (Qodo 3581287840): this server binds 0.0.0.0 by default, so an
+        # unauthenticated LAN client must never be able to force unbounded
+        # memory use through this header alone.
+        raw_length = self.headers.get("Content-Length")
+        if raw_length is None:
+            self._send_text(411, "Content-Length is required\n")
+            return
+        try:
+            length = int(raw_length)
+        except ValueError:
+            self._send_text(400, "Content-Length must be an integer\n")
+            return
+        if length < 0:
+            self._send_text(400, "Content-Length must not be negative\n")
+            return
+        if length > MAX_POST_BYTES:
+            self._send_text(413, f"request body exceeds the {MAX_POST_BYTES}-byte limit\n")
+            return
+
         raw = self.rfile.read(length) if length else b""
         content_type = self.headers.get("Content-Type", "")
         form = _parse_body(raw, content_type)
