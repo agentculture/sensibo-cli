@@ -63,6 +63,7 @@ def _argv_has_json(argv: list[str] | None) -> bool:
 
 def _build_parser() -> argparse.ArgumentParser:
     from sensibo.cli._commands import cli as _cli_group
+    from sensibo.cli._commands import collect as _collect_cmd
     from sensibo.cli._commands import devices as _devices_cmd
     from sensibo.cli._commands import doctor as _doctor_cmd
     from sensibo.cli._commands import explain as _explain_cmd
@@ -100,6 +101,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _explain_cmd.register(sub)
     _overview_cmd.register(sub)
     _doctor_cmd.register(sub)
+    _collect_cmd.register(sub)
     _cli_group.register(sub)
     _devices_cmd.register(sub)
     _query_group.register(sub)

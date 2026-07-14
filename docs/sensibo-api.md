@@ -147,6 +147,15 @@ than ~60s (Home Assistant's battle-tested floor); back off on 429.
   Two-year history is carried entirely by forward retention, and **a collection
   gap longer than ~1 day is permanently lost data** — the collector needs an
   always-on home.
+- **How the collector uses this (`sensibo collect`, task t6).** On a store's
+  first cycle it probes each pod through the descending ladder
+  `days=730, 365, 90, 30, 7, 1`, treating a 403 / `GatedHistoryWindowError` as
+  "window gated, try smaller" (never an error). It records the series from the
+  largest permitted window and persists the empirically found window into the
+  store's `meta` table (`backfill_window_days`), logging it to stderr — so the
+  runtime probe confirms this documented finding per account rather than
+  hard-coding it, and later runs skip the probe. On this account the probe
+  lands on `days=1`.
 - Don't conflate this with Sensibo Plus's advertised "30 days of event logs" —
   that is the *events* endpoint, not measurements.
 

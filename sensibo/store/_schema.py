@@ -20,6 +20,13 @@ Two tables:
     seen before needs no migration — it's just a new value of the ``field``
     column. ``value_numeric``/``value_text`` are exclusive; ``unit`` is a free
     text tag (see :mod:`sensibo.store._units`), left ``NULL`` when unknown.
+
+``meta``
+    A tiny string key/value side-table for store-level facts that aren't
+    readings — currently the collector's empirically probed
+    ``historicalMeasurements`` backfill window (``docs/sensibo-api.md``,
+    "History retention"). Kept here, not in a separate file, so one db is the
+    whole story an operator can query offline.
 """
 
 from __future__ import annotations
@@ -61,6 +68,13 @@ CREATE INDEX IF NOT EXISTS idx_readings_location_field_timestamp
 _CREATE_READINGS_TIMESTAMP_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_readings_timestamp
     ON readings (timestamp)
+"""
+
+_CREATE_META = """
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+)
 """
 
 UPSERT_LOCATION_SQL = """
@@ -115,12 +129,20 @@ SELECT_LATEST_READINGS_SQL = (
 
 DELETE_OLDER_THAN_SQL = "DELETE FROM readings WHERE timestamp < ?"
 
+SET_META_SQL = """
+INSERT INTO meta (key, value) VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value
+"""
+
+GET_META_SQL = "SELECT value FROM meta WHERE key = ?"
+
 
 def init_schema(conn: sqlite3.Connection) -> None:
     """Create tables/indexes if they don't exist yet. Safe to call every connect."""
     with conn:
         conn.execute(_CREATE_LOCATIONS)
         conn.execute(_CREATE_READINGS)
+        conn.execute(_CREATE_META)
         conn.execute(_CREATE_READINGS_LOCATION_FIELD_TIME_INDEX)
         conn.execute(_CREATE_READINGS_TIMESTAMP_INDEX)
         # SCHEMA_VERSION is an internal int constant, never caller input;
