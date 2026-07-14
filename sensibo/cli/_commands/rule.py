@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from sensibo.api import ApiError
+from sensibo.cli._commands._automation import JSON_HELP
 from sensibo.cli._commands._client import build_client, from_api_error
 from sensibo.cli._commands.overview import emit_overview
 from sensibo.cli._errors import EXIT_USER_ERROR, CliError
@@ -385,7 +386,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     rules = _rules_store(args)
 
     if args.daemon:
-        return _run_daemon(rules, args, json_mode=json_mode)
+        return _run_daemon(rules, args)
 
     with Store(db_path=args.db) as data_store:
         outcomes = _run_pass(data_store, rules, args)
@@ -394,7 +395,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_daemon(rules: RulesStore, args: argparse.Namespace, *, json_mode: bool) -> int:
+def _run_daemon(rules: RulesStore, args: argparse.Namespace) -> int:
     interval = max(float(args.interval), _MIN_RUN_INTERVAL_SECONDS)
     emit_diagnostic(
         f"sensibo rule run --daemon: evaluating every {interval:.0f}s "
@@ -491,17 +492,17 @@ def register(sub: argparse._SubParsersAction) -> None:
         "rule",
         help="Local declarative automation that drives the AC (see 'sensibo rule overview').",
     )
-    p.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    p.add_argument("--json", action="store_true", help=JSON_HELP)
     p.set_defaults(func=_no_verb, json=False)
     noun_sub = p.add_subparsers(dest="rule_command", parser_class=type(p))
 
     ov = noun_sub.add_parser("overview", help="Describe the rule noun.")
-    ov.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    ov.add_argument("--json", action="store_true", help=JSON_HELP)
     ov.set_defaults(func=cmd_overview)
 
     lst = noun_sub.add_parser("list", help="List every rule with its armed / dry-run state.")
     _add_rules_flag(lst)
-    lst.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    lst.add_argument("--json", action="store_true", help=JSON_HELP)
     lst.set_defaults(func=cmd_list)
 
     add = noun_sub.add_parser("add", help="Define a rule from a JSON file or inline flags.")
@@ -540,13 +541,13 @@ def register(sub: argparse._SubParsersAction) -> None:
         help="Inline threshold: comparison value.",
     )
     _add_rules_flag(add)
-    add.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    add.add_argument("--json", action="store_true", help=JSON_HELP)
     add.set_defaults(func=cmd_add)
 
     rm = noun_sub.add_parser("remove", help="Delete a rule.")
     rm.add_argument("name", help="The rule name to remove.")
     _add_rules_flag(rm)
-    rm.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    rm.add_argument("--json", action="store_true", help=JSON_HELP)
     rm.set_defaults(func=cmd_remove)
 
     dry = noun_sub.add_parser("dry-run", help="Evaluate a rule NOW against the store (read-only).")
@@ -554,19 +555,19 @@ def register(sub: argparse._SubParsersAction) -> None:
     _add_rules_flag(dry)
     _add_db_flag(dry)
     _add_min_off_time(dry)
-    dry.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    dry.add_argument("--json", action="store_true", help=JSON_HELP)
     dry.set_defaults(func=cmd_dry_run)
 
     arm = noun_sub.add_parser("arm", help="Activate a rule (requires a fresh dry-run).")
     arm.add_argument("name", help="The rule name to arm.")
     _add_rules_flag(arm)
-    arm.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    arm.add_argument("--json", action="store_true", help=JSON_HELP)
     arm.set_defaults(func=cmd_arm)
 
     disarm = noun_sub.add_parser("disarm", help="Deactivate a rule.")
     disarm.add_argument("name", help="The rule name to disarm.")
     _add_rules_flag(disarm)
-    disarm.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    disarm.add_argument("--json", action="store_true", help=JSON_HELP)
     disarm.set_defaults(func=cmd_disarm)
 
     run = noun_sub.add_parser(
@@ -585,5 +586,5 @@ def register(sub: argparse._SubParsersAction) -> None:
     _add_rules_flag(run)
     _add_db_flag(run)
     _add_min_off_time(run)
-    run.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    run.add_argument("--json", action="store_true", help=JSON_HELP)
     run.set_defaults(func=cmd_run)

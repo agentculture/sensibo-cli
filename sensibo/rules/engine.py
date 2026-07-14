@@ -10,6 +10,28 @@ properties are built in and are the reason this module exists:
    holds across restarts. A condition that flaps (oscillating on/off every
    evaluation) therefore cannot cycle the compressor faster than
    ``min_off_time``; ``tests/test_rules_engine.py`` proves it.
+
+   **The gate is robust to wall-clock jumps** (NTP steps, manual clock changes;
+   Qodo review 3581287821). A naive gate that trusts only wall time can be
+   fooled: a *forward* jump makes the elapsed time look larger and would permit
+   an early power flip. So the gate consults TWO clocks and opens only when
+   BOTH agree the off-time has elapsed:
+
+   * the **persisted wall-clock** ``last_power_change`` — the only timestamp
+     that can survive a restart, but not monotonic (an NTP step moves it);
+   * an in-process **monotonic** stamp per pod
+     (:meth:`~sensibo.rules.persistence.RulesStore.monotonic_power_change`),
+     recorded alongside the wall-clock stamp on every power change. It cannot
+     run backwards or leap, so within one process it blocks a flip that a
+     forward wall-clock jump would otherwise wave through. It is *not* persisted
+     (a monotonic zero is not comparable across processes), so after a restart —
+     when no monotonic stamp exists for a pod — the wall-clock minimum is the
+     sole guard, exactly as before.
+
+   A persisted wall-clock stamp that lies in the FUTURE (the clock was set
+   *backwards* after the write) is clamped to "now" so the elapsed time is 0
+   rather than negative: the flip is suppressed, and the reported remaining time
+   stays within the off-time window instead of ballooning by the jump size.
 2. **At most one write per pod per pass.** :func:`run_once` writes to any given
    pod at most once, no matter how many armed rules target it, and every write
    goes through :class:`sensibo.api.SensiboClient` — inheriting its client-side
@@ -104,20 +126,24 @@ def dry_run(
     stored: StoredRule,
     *,
     now_ts: float | None = None,
+    mono_ts: float | None = None,
     min_off_time: float | None = None,
 ) -> dict[str, Any]:
     """Evaluate ``stored`` against the store NOW and report what it would do.
 
     Never constructs a client and never writes anything — the inspection mode a
-    rule must pass before it can be armed.
+    rule must pass before it can be armed. ``now_ts`` injects the wall clock and
+    ``mono_ts`` the monotonic clock (both default to the real clocks; tests
+    pin them).
     """
     now = time.time() if now_ts is None else now_ts
+    mono_now = time.monotonic() if mono_ts is None else mono_ts
     floor = effective_min_off_time(min_off_time)
     rule = stored.rule
     condition = evaluate(data_store, rule.conditions, now_ts=now)
 
     changes_power = _POWER_FIELD in rule.action
-    gate = _power_gate_status(rules_store, rule.pod, now=now, min_off_time=floor)
+    gate = _power_gate_status(rules_store, rule.pod, now=now, mono_now=mono_now, min_off_time=floor)
 
     report: dict[str, Any] = {
         "rule": rule.name,
@@ -135,13 +161,41 @@ def dry_run(
     return report
 
 
-def _power_gate_status(
-    rules_store: RulesStore, pod: str, *, now: float, min_off_time: float
-) -> dict[str, Any]:
+def _gate_remaining(
+    rules_store: RulesStore, pod: str, *, now: float, mono_now: float, min_off_time: float
+) -> tuple[float | None, float]:
+    """Seconds still to wait before a power flip is allowed on ``pod``.
+
+    Returns ``(last_power_change, remaining)``. ``remaining <= 0`` means the gate
+    is open; ``last`` is ``None`` when this pod's power has never changed (no
+    prior write to gate against). The result is the MAX of the wall-clock and —
+    when a monotonic stamp exists this process lifetime — the monotonic
+    outstanding waits, so a forward wall-clock jump cannot open the gate while
+    the monotonic clock still says the window is open. A persisted stamp that
+    lies in the future is clamped to "now" (elapsed 0), so it suppresses rather
+    than permitting a flip on a negative elapsed. See this module's docstring
+    (Qodo 3581287821) for the full reasoning.
+    """
     last = rules_store.pod_state(pod).last_power_change
     if last is None:
+        return None, 0.0
+    wall_elapsed = max(0.0, now - last)
+    remaining = min_off_time - wall_elapsed
+    mono_last = rules_store.monotonic_power_change(pod)
+    if mono_last is not None:
+        mono_elapsed = max(0.0, mono_now - mono_last)
+        remaining = max(remaining, min_off_time - mono_elapsed)
+    return last, remaining
+
+
+def _power_gate_status(
+    rules_store: RulesStore, pod: str, *, now: float, mono_now: float, min_off_time: float
+) -> dict[str, Any]:
+    last, remaining = _gate_remaining(
+        rules_store, pod, now=now, mono_now=mono_now, min_off_time=min_off_time
+    )
+    if last is None:
         return {"last_power_change": None, "would_suppress": False, "remaining_seconds": 0.0}
-    remaining = min_off_time - (now - last)
     if remaining > 0:
         return {
             "last_power_change": last,
@@ -160,14 +214,20 @@ def run_once(
     client: _AcClient,
     *,
     now_ts: float | None = None,
+    mono_ts: float | None = None,
     min_off_time: float | None = None,
 ) -> list[Outcome]:
     """Evaluate every ARMED rule and apply at most one write per pod.
 
     Returns one :class:`Outcome` per armed rule (in stored order). The caller
-    (``sensibo rule run``) logs the ones that wrote or were suppressed.
+    (``sensibo rule run``) logs the ones that wrote or were suppressed. ``now_ts``
+    injects the wall clock and ``mono_ts`` the monotonic clock (both default to
+    the real clocks; tests pin them). In a daemon loop the SAME ``rules_store``
+    is reused across passes, which is what lets the per-process monotonic stamp
+    guard the gate against a wall-clock jump between passes.
     """
     now = time.time() if now_ts is None else now_ts
+    mono_now = time.monotonic() if mono_ts is None else mono_ts
     floor = effective_min_off_time(min_off_time)
     written_pods: set[str] = set()
     outcomes: list[Outcome] = []
@@ -180,6 +240,7 @@ def run_once(
                 client,
                 stored,
                 now=now,
+                mono_now=mono_now,
                 min_off_time=floor,
                 written_pods=written_pods,
             )
@@ -194,6 +255,7 @@ def _evaluate_and_maybe_write(
     stored: StoredRule,
     *,
     now: float,
+    mono_now: float,
     min_off_time: float,
     written_pods: set[str],
 ) -> Outcome:
@@ -215,7 +277,9 @@ def _evaluate_and_maybe_write(
 
     changes_power = _POWER_FIELD in diff
     if changes_power:
-        blocked = _hysteresis_block(rules_store, rule.pod, now=now, min_off_time=min_off_time)
+        blocked = _hysteresis_block(
+            rules_store, rule.pod, now=now, mono_now=mono_now, min_off_time=min_off_time
+        )
         if blocked is not None:
             outcome.suppressed_reason = blocked
             outcome.changes = diff
@@ -226,27 +290,32 @@ def _evaluate_and_maybe_write(
     outcome.changes = diff
     written_pods.add(rule.pod)
     if changes_power:
-        rules_store.record_power_change(rule.pod, now)
+        # Stamp BOTH clocks: the persisted wall clock (survives a restart) and
+        # the in-process monotonic clock (immune to a wall-clock jump).
+        rules_store.record_power_change(rule.pod, now, monotonic_ts=mono_now)
     else:
         rules_store.record_action(rule.pod, now)
     return outcome
 
 
 def _hysteresis_block(
-    rules_store: RulesStore, pod: str, *, now: float, min_off_time: float
+    rules_store: RulesStore, pod: str, *, now: float, mono_now: float, min_off_time: float
 ) -> str | None:
-    """Return a suppression reason if a power change is inside the off-time window."""
-    last = rules_store.pod_state(pod).last_power_change
-    if last is None:
+    """Return a suppression reason if a power change is inside the off-time window.
+
+    Uses the two-clock gate (:func:`_gate_remaining`) so a forward wall-clock
+    jump cannot open the window while the monotonic clock still says it is
+    closed.
+    """
+    last, remaining = _gate_remaining(
+        rules_store, pod, now=now, mono_now=mono_now, min_off_time=min_off_time
+    )
+    if last is None or remaining <= 0:
         return None
-    elapsed = now - last
-    if elapsed < min_off_time:
-        remaining = min_off_time - elapsed
-        return (
-            f"minimum off-time not elapsed: {remaining:.0f}s remaining of "
-            f"{min_off_time:.0f}s (prevents compressor short-cycling)"
-        )
-    return None
+    return (
+        f"minimum off-time not elapsed: {remaining:.0f}s remaining of "
+        f"{min_off_time:.0f}s (prevents compressor short-cycling)"
+    )
 
 
 def _current_ac_state(client: _AcClient, pod_id: str) -> dict[str, Any]:
