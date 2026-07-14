@@ -124,6 +124,43 @@ skills-present check. Exits 1 when unhealthy.
     sensibo doctor --json
 """
 
+_COLLECT = """\
+# sensibo collect
+
+Poll the whole fleet on a cadence and persist every reported sensor reading into
+the local time-series store — the retention pillar. One cycle is a single
+`GET /users/me/pods?fields=*` call (never one request per device), so it stays
+within Sensibo's rate limit.
+
+`collect` reads from the cloud and writes only to the local store; it never
+drives an AC, so it has no `--apply` gate. Readings are stored under the API's
+own reading times, so re-collecting an overlapping window is idempotent.
+
+Two Sensibo traps are handled: `pm25` is stored with a unit derived from the
+pod's `productModel` (AQI enum on Pure, micrograms on Elements), and each Room
+Sensor is persisted under its own `ms_*` id with its parent pod recorded (a Room
+Sensor is not a pod — it arrives nested in `motionSensors[]`).
+
+## First-run backfill
+
+On a store's first cycle, `collect` probes `historicalMeasurements` per pod
+through descending windows (days=730, 365, 90, 30, 7, 1), treating an HTTP 403
+as "window gated, try smaller" rather than an error. It records the series from
+the largest permitted window and remembers that window in the store, so later
+runs skip the probe. On a non-Plus account only days=1 is typically accessible.
+
+## Usage
+
+    sensibo collect                     # one cycle (the default), then exit
+    sensibo collect --once --json       # one cycle, machine-readable summary
+    sensibo collect --daemon            # loop, polling every 90s (Ctrl-C stops)
+    sensibo collect --daemon --interval 120
+    sensibo collect --once --db /path/to/sensibo.db
+
+The poll interval has a hard floor of 60s; a lower `--interval` is rejected.
+Results go to stdout; progress and the backfill window are logged to stderr.
+"""
+
 _CLI = """\
 # sensibo cli
 
@@ -146,6 +183,7 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("explain",): _EXPLAIN,
     ("overview",): _OVERVIEW,
     ("doctor",): _DOCTOR,
+    ("collect",): _COLLECT,
     ("cli",): _CLI,
     ("cli", "overview"): _CLI,
 }

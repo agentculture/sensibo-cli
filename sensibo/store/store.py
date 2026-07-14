@@ -327,6 +327,24 @@ class Store:
             cursor = self._conn.execute(_schema.DELETE_OLDER_THAN_SQL, (cutoff,))
             return cursor.rowcount
 
+    # -- metadata ---------------------------------------------------------
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Persist a small store-level fact under ``key`` (idempotent upsert).
+
+        Not for readings — this is the side-channel the collector uses to
+        remember store-wide facts like the empirically probed
+        ``historicalMeasurements`` backfill window, so a first run's finding
+        survives a restart and later runs skip the probe.
+        """
+        with self._conn:
+            self._conn.execute(_schema.SET_META_SQL, (key, value))
+
+    def get_meta(self, key: str) -> str | None:
+        """Return the value stored under ``key``, or ``None`` if unset."""
+        row = self._conn.execute(_schema.GET_META_SQL, (key,)).fetchone()
+        return row["value"] if row else None
+
 
 def _build_range_query(
     location_id: str, field: str, since_ts: float | None, until_ts: float | None
