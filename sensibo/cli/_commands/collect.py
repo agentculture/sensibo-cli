@@ -27,7 +27,7 @@ from sensibo.collect import DEFAULT_INTERVAL, MIN_INTERVAL, Collector
 from sensibo.store import Store
 
 
-def build_client(args: argparse.Namespace) -> SensiboClient:
+def build_client() -> SensiboClient:
     """Construct the real Sensibo client. Monkeypatched to a fake in tests."""
     return SensiboClient()
 
@@ -119,7 +119,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         )
 
     try:
-        client = build_client(args)
+        client = build_client()
     except ApiError as err:
         raise _as_cli_error(err) from None
 

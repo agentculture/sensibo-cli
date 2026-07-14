@@ -13,12 +13,10 @@ any ``ApiError`` the client raises into a ``CliError`` carrying the same
 
 from __future__ import annotations
 
-from typing import Callable, TypeVar
+from typing import Callable
 
 from sensibo.api import ApiError, HttpError, SensiboClient
 from sensibo.cli._errors import EXIT_ENV_ERROR, EXIT_USER_ERROR, CliError
-
-_T = TypeVar("_T")
 
 _USER_HTTP_STATUSES = {400, 404}
 
@@ -41,7 +39,7 @@ def from_api_error(err: ApiError) -> CliError:
     return CliError(code=_exit_code(err), message=err.message, remediation=err.remediation)
 
 
-def call(fn: Callable[[], _T]) -> _T:
+def call[T](fn: Callable[[], T]) -> T:
     """Invoke ``fn``, translating any :class:`ApiError` into a :class:`CliError`."""
     try:
         return fn()

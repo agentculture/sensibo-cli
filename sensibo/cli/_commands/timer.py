@@ -27,6 +27,8 @@ import argparse
 
 from sensibo.api import ApiError, HttpError, SensiboClient
 from sensibo.cli._commands._automation import (
+    JSON_HELP,
+    POD_HELP,
     build_payload,
     make_overview_command,
     parse_raw_body,
@@ -177,23 +179,23 @@ def register(sub: argparse._SubParsersAction) -> None:
         "timer",
         help="A one-shot server-side countdown on a pod (cloud-executed).",
     )
-    p.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    p.add_argument("--json", action="store_true", help=JSON_HELP)
     p.set_defaults(func=cmd_overview, json=False)
     noun_sub = p.add_subparsers(dest="timer_command", parser_class=type(p))
 
     overview = noun_sub.add_parser("overview", help="Describe the timer noun.")
-    overview.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    overview.add_argument("--json", action="store_true", help=JSON_HELP)
     overview.set_defaults(func=cmd_overview)
 
     show = noun_sub.add_parser("show", help="Read the current timer state.")
-    show.add_argument("pod", help="Sensibo pod id (device id).")
-    show.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    show.add_argument("pod", help=POD_HELP)
+    show.add_argument("--json", action="store_true", help=JSON_HELP)
     show.set_defaults(func=cmd_show)
 
     set_ = noun_sub.add_parser(
         "set", help="Set a countdown timer (dry-run by default; --apply commits)."
     )
-    set_.add_argument("pod", help="Sensibo pod id (device id).")
+    set_.add_argument("pod", help=POD_HELP)
     set_.add_argument("--minutes", type=int, help="Minutes from now the timer fires.")
     set_.add_argument("--state", choices=["on", "off"], help="AC state the timer sets.")
     set_.add_argument("--mode", help="AC mode to set when --state=on, e.g. cool.")
@@ -206,15 +208,15 @@ def register(sub: argparse._SubParsersAction) -> None:
     set_.add_argument(
         "--apply", action="store_true", help="Commit the change (default: dry-run preview only)."
     )
-    set_.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    set_.add_argument("--json", action="store_true", help=JSON_HELP)
     set_.set_defaults(func=cmd_set)
 
     clear = noun_sub.add_parser(
         "clear", help="Clear the countdown timer (dry-run by default; --apply commits)."
     )
-    clear.add_argument("pod", help="Sensibo pod id (device id).")
+    clear.add_argument("pod", help=POD_HELP)
     clear.add_argument(
         "--apply", action="store_true", help="Commit the change (default: dry-run preview only)."
     )
-    clear.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    clear.add_argument("--json", action="store_true", help=JSON_HELP)
     clear.set_defaults(func=cmd_clear)

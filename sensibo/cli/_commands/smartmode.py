@@ -26,6 +26,8 @@ import argparse
 
 from sensibo.api import ApiError, SensiboClient
 from sensibo.cli._commands._automation import (
+    JSON_HELP,
+    POD_HELP,
     build_payload,
     make_overview_command,
     read_payload,
@@ -110,35 +112,35 @@ def register(sub: argparse._SubParsersAction) -> None:
         "smartmode",
         help="Climate React — Sensibo's server-side threshold automation (cloud-executed).",
     )
-    p.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    p.add_argument("--json", action="store_true", help=JSON_HELP)
     p.set_defaults(func=cmd_overview, json=False)
     noun_sub = p.add_subparsers(dest="smartmode_command", parser_class=type(p))
 
     overview = noun_sub.add_parser("overview", help="Describe the smartmode noun.")
-    overview.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    overview.add_argument("--json", action="store_true", help=JSON_HELP)
     overview.set_defaults(func=cmd_overview)
 
     show = noun_sub.add_parser("show", help="Read the current Climate React config.")
-    show.add_argument("pod", help="Sensibo pod id (device id).")
-    show.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    show.add_argument("pod", help=POD_HELP)
+    show.add_argument("--json", action="store_true", help=JSON_HELP)
     show.set_defaults(func=cmd_show)
 
     enable = noun_sub.add_parser(
         "enable", help="Turn Climate React on (dry-run by default; --apply commits)."
     )
-    enable.add_argument("pod", help="Sensibo pod id (device id).")
+    enable.add_argument("pod", help=POD_HELP)
     enable.add_argument(
         "--apply", action="store_true", help="Commit the change (default: dry-run preview only)."
     )
-    enable.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    enable.add_argument("--json", action="store_true", help=JSON_HELP)
     enable.set_defaults(func=cmd_enable)
 
     disable = noun_sub.add_parser(
         "disable", help="Turn Climate React off (dry-run by default; --apply commits)."
     )
-    disable.add_argument("pod", help="Sensibo pod id (device id).")
+    disable.add_argument("pod", help=POD_HELP)
     disable.add_argument(
         "--apply", action="store_true", help="Commit the change (default: dry-run preview only)."
     )
-    disable.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    disable.add_argument("--json", action="store_true", help=JSON_HELP)
     disable.set_defaults(func=cmd_disable)

@@ -32,6 +32,10 @@ from sensibo.cli._errors import EXIT_USER_ERROR, CliError
 # -- shared validation --------------------------------------------------
 
 
+POD_HELP = "Sensibo pod id (device id)."
+JSON_HELP = "Emit structured JSON."
+
+
 def parse_raw_body(value: str) -> dict[str, object]:
     """Parse ``--raw-body`` into a JSON object, or raise a user-facing CliError."""
     try:

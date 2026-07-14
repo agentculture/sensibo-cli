@@ -29,6 +29,8 @@ import re
 
 from sensibo.api import ApiError, SensiboClient
 from sensibo.cli._commands._automation import (
+    JSON_HELP,
+    POD_HELP,
     build_payload,
     make_overview_command,
     parse_raw_body,
@@ -221,23 +223,23 @@ def register(sub: argparse._SubParsersAction) -> None:
         "schedule",
         help="Recurring server-side automation on a pod (cloud-executed).",
     )
-    p.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    p.add_argument("--json", action="store_true", help=JSON_HELP)
     p.set_defaults(func=cmd_overview, json=False)
     noun_sub = p.add_subparsers(dest="schedule_command", parser_class=type(p))
 
     overview = noun_sub.add_parser("overview", help="Describe the schedule noun.")
-    overview.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    overview.add_argument("--json", action="store_true", help=JSON_HELP)
     overview.set_defaults(func=cmd_overview)
 
     lst = noun_sub.add_parser("list", help="List the schedules configured on a pod.")
-    lst.add_argument("pod", help="Sensibo pod id (device id).")
-    lst.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    lst.add_argument("pod", help=POD_HELP)
+    lst.add_argument("--json", action="store_true", help=JSON_HELP)
     lst.set_defaults(func=cmd_list)
 
     create = noun_sub.add_parser(
         "create", help="Create a schedule (dry-run by default; --apply commits)."
     )
-    create.add_argument("pod", help="Sensibo pod id (device id).")
+    create.add_argument("pod", help=POD_HELP)
     create.add_argument("--time", help="24-hour HH:MM the schedule fires at.")
     create.add_argument(
         "--days",
@@ -262,16 +264,16 @@ def register(sub: argparse._SubParsersAction) -> None:
     create.add_argument(
         "--apply", action="store_true", help="Commit the change (default: dry-run preview only)."
     )
-    create.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    create.add_argument("--json", action="store_true", help=JSON_HELP)
     create.set_defaults(func=cmd_create)
 
     delete = noun_sub.add_parser(
         "delete", help="Delete a schedule (dry-run by default; --apply commits)."
     )
-    delete.add_argument("pod", help="Sensibo pod id (device id).")
+    delete.add_argument("pod", help=POD_HELP)
     delete.add_argument("schedule_id", help="The schedule id to delete.")
     delete.add_argument(
         "--apply", action="store_true", help="Commit the change (default: dry-run preview only)."
     )
-    delete.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    delete.add_argument("--json", action="store_true", help=JSON_HELP)
     delete.set_defaults(func=cmd_delete)

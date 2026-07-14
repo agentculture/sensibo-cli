@@ -393,7 +393,7 @@ def patched_client(monkeypatch):
 
     def _install(client: _FakeClient) -> None:
         holder["client"] = client
-        monkeypatch.setattr(collect_cmd, "build_client", lambda args: holder["client"])
+        monkeypatch.setattr(collect_cmd, "build_client", lambda: holder["client"])
 
     return _install
 
@@ -480,7 +480,7 @@ def test_collect_daemon_handles_keyboard_interrupt_cleanly(
 def test_collect_maps_api_error_to_clean_cli_error(monkeypatch, capsys, tmp_path) -> None:
     from sensibo.api import MissingApiKeyError
 
-    def _boom(args):
+    def _boom():
         raise MissingApiKeyError("no api key", remediation="set SENSIBO_API_KEY")
 
     monkeypatch.setattr(collect_cmd, "build_client", _boom)
