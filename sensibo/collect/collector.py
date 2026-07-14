@@ -144,6 +144,7 @@ class Collector:
                 kind=KIND_POD,
                 product_model=product_model,
                 room_name=_room_name(pod),
+                seen_at=_seen_at(pod.get("measurements"), wall),
             )
             pod_count += 1
             readings += self._record_measurements(
@@ -177,6 +178,7 @@ class Collector:
                 product_model=model,
                 parent_pod_id=parent_pod_id,
                 room_name=_room_name(sensor),
+                seen_at=_seen_at(sensor.get("measurements"), wall),
             )
             self._record_measurements(sensor_id, sensor.get("measurements"), model, wall)
             count += 1
@@ -322,6 +324,19 @@ def _is_storable(value: Any) -> bool:
     """A scalar the store can hold — numbers, bools, strings; never a nested
     object or list (which would stringify into garbage)."""
     return isinstance(value, (int, float, str, bool))
+
+
+def _seen_at(measurements: Any, wall: float) -> float:
+    """A location's ``last_seen``: its own latest reading time, never the poll.
+
+    A Room Sensor that died months ago still rides along in every fleet
+    snapshot carrying its *old* ``time.time`` stamp — stamping the poll
+    instant would make a dead sensor look alive forever (caught against the
+    operator's real fleet: a sensor silent since February read as fresh).
+    """
+    if isinstance(measurements, Mapping):
+        return _reading_timestamp(measurements, fallback=wall)
+    return wall
 
 
 def _reading_timestamp(measurements: Mapping, *, fallback: float) -> float:

@@ -15,14 +15,13 @@ Two location kinds, matching ``sensibo/store``'s vocabulary
   own, nested inside its parent's ``motionSensors[]`` with a stable ``ms_*``
   id and its own ``measurements`` (``docs/sensibo-api.md``, "Trap 2").
 
-``last_seen`` is *derived*, not read from a documented API field: Sensibo's
-``connectionStatus`` carries only ``isAlive`` (confirmed against pysensibo and
-the operator's real fleet — no per-field timestamp exists in the response).
-A single ``fleet_snapshot()`` call is one instant, so a location's
-``last_seen`` is that instant when it reported at least one current
-measurement, and ``None`` when it reported none (offline/stale in this
-snapshot). This is an honest reading of what one snapshot can tell you, not a
-promise Sensibo makes about its own payload shape.
+``last_seen`` is the location's own ``measurements.time.time`` stamp when the
+payload carries one — NOT the poll instant. A Room Sensor that died months ago
+still appears in every poll, carrying its old timestamp; stamping the poll
+instant would make a dead sensor look alive forever (caught against the
+operator's real fleet: a sensor silent since February read as fresh). The poll
+instant is only the fallback when a measurements object has no time stamp, and
+``None`` means the location reported nothing at all in this snapshot.
 """
 
 from __future__ import annotations
@@ -91,6 +90,23 @@ def _readings_of(measurements: object) -> dict[str, object]:
     return dict(measurements) if isinstance(measurements, dict) else {}
 
 
+def _last_seen(readings: dict[str, object], as_of: str) -> str | None:
+    """The location's own latest measurement time, not the poll instant.
+
+    Sensibo stamps each measurements object with ``time.time``. A sensor that
+    died months ago still appears in every poll carrying its *old* timestamp —
+    using the poll instant here would make a dead sensor look alive forever.
+    """
+    if not readings:
+        return None
+    stamp = readings.get("time")
+    if isinstance(stamp, dict):
+        when = stamp.get("time")
+        if isinstance(when, str) and when:
+            return when
+    return as_of
+
+
 def _describe_room_sensor(sensor: dict, parent_pod_id: str | None, as_of: str) -> Location:
     readings = _readings_of(sensor.get("measurements"))
     sensor_id = sensor.get("id")
@@ -100,7 +116,7 @@ def _describe_room_sensor(sensor: dict, parent_pod_id: str | None, as_of: str) -
         product_model=sensor.get("productModel"),
         connection_status=_connection_label(sensor.get("connectionStatus")),
         readings=readings,
-        last_seen=as_of if readings else None,
+        last_seen=_last_seen(readings, as_of),
         parent_pod_id=sensor.get("parentDeviceUid", parent_pod_id),
     )
 
@@ -116,7 +132,7 @@ def _describe_pod(pod: dict, as_of: str) -> Location:
         product_model=pod.get("productModel"),
         connection_status=_connection_label(pod.get("connectionStatus")),
         readings=readings,
-        last_seen=as_of if readings else None,
+        last_seen=_last_seen(readings, as_of),
         room=_room_name(pod),
         room_sensors=tuple(
             _describe_room_sensor(sensor, pod_id, as_of)
