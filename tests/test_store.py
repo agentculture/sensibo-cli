@@ -224,6 +224,61 @@ def test_query_range_without_bounds_returns_everything_in_order(store: Store) ->
     assert [r.timestamp for r in rows] == [100.0, 200.0, 300.0]
 
 
+def test_query_range_limit_bounds_sql_side_to_the_n_most_recent_readings(store: Store) -> None:
+    store.upsert_location("pod-17", kind="pod", product_model="airq")
+    for i in range(50):
+        store.record_reading("pod-17", "temperature", float(i), timestamp=float(i))
+
+    rows = store.query_range("pod-17", "temperature", limit=10)
+
+    # Bounded to the 10 *most recent* readings, but still returned oldest to
+    # newest (Qodo 3581287838: a caller must never have to fetch all 50 rows
+    # to get the last 10 -- the LIMIT has to happen in SQL, not a Python
+    # slice after a full fetchall).
+    assert [r.timestamp for r in rows] == [float(t) for t in range(40, 50)]
+
+
+def test_query_range_limit_combines_with_since_and_until(store: Store) -> None:
+    store.upsert_location("pod-18", kind="pod", product_model="airq")
+    for ts in (100.0, 200.0, 300.0, 400.0, 500.0):
+        store.record_reading("pod-18", "temperature", ts / 10, timestamp=ts)
+
+    rows = store.query_range("pod-18", "temperature", since=150.0, until=450.0, limit=2)
+
+    # In range [150, 450]: 200, 300, 400 -> most recent 2 -> 300, 400.
+    assert [r.timestamp for r in rows] == [300.0, 400.0]
+
+
+def test_query_range_without_limit_stays_unbounded(store: Store) -> None:
+    store.upsert_location("pod-19", kind="pod", product_model="airq")
+    for i in range(20):
+        store.record_reading("pod-19", "temperature", float(i), timestamp=float(i))
+
+    rows = store.query_range("pod-19", "temperature")
+    assert len(rows) == 20
+
+
+def test_build_range_query_applies_limit_sql_side_not_via_python_slicing() -> None:
+    # White-box check on the query builder itself: when `limit` is given,
+    # the LIMIT clause must be baked into the SQL text (and the limit value
+    # bound as a parameter) -- proof this is SQL-side bounding, not a
+    # fetchall-then-slice in Python.
+    from sensibo.store.store import _build_range_query
+
+    sql, params = _build_range_query("pod-x", "temperature", None, None, 25)
+    assert "LIMIT ?" in sql
+    assert params[-1] == 25
+
+    sql, params = _build_range_query("pod-x", "temperature", 1.0, 2.0, 25)
+    assert "LIMIT ?" in sql
+    assert params == ("pod-x", "temperature", 1.0, 2.0, 25)
+
+    # No limit given -> the plain unbounded query, no LIMIT clause at all.
+    sql, params = _build_range_query("pod-x", "temperature", None, None, None)
+    assert "LIMIT" not in sql
+    assert params == ("pod-x", "temperature")
+
+
 def test_latest_reading_picks_the_newest_timestamp(store: Store) -> None:
     store.upsert_location("pod-12", kind="pod", product_model="airq")
     store.record_reading("pod-12", "temperature", 19.0, timestamp=100.0)

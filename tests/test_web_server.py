@@ -18,6 +18,7 @@ mocking with a working socket to a real host.
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import socket
@@ -33,6 +34,7 @@ import pytest
 
 from sensibo.store import Store
 from sensibo.web import WebServer
+from sensibo.web.server import _DEFAULT_API_HISTORY_LIMIT, MAX_POST_BYTES
 
 _ALLOWED_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
@@ -164,6 +166,33 @@ def _post(
         return err.code, err.read().decode("utf-8")
 
 
+def _raw_post(
+    srv: WebServer,
+    path: str,
+    *,
+    headers: dict[str, str] | None = None,
+    body: bytes = b"",
+) -> tuple[int, bytes]:
+    """POST with full control over headers, including omitting
+    Content-Length entirely -- `urlopen`/`Request` always compute and send a
+    correct one, so the missing/invalid/oversized Content-Length paths
+    (Qodo 3581287840) need this lower-level client instead.
+    """
+    _host, port = srv.server_address[:2]
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.putrequest("POST", path)
+        for name, value in (headers or {}).items():
+            conn.putheader(name, value)
+        conn.endheaders()
+        if body:
+            conn.send(body)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
 # --- pages: reads are open, and need zero cloud -----------------------------
 
 
@@ -246,6 +275,120 @@ def test_api_history_json_includes_the_full_seeded_series(running_server) -> Non
 def test_api_history_requires_location_and_field(running_server) -> None:
     srv, _fake = running_server
     status, _body = _get(srv, "/api/history?location=pod-1")
+    assert status == 400
+
+
+# --- bounded reads: large history stays bounded (Qodo review 3581287838) ---
+
+
+def test_location_page_bounds_history_when_the_store_holds_thousands_of_readings(
+    running_server,
+) -> None:
+    srv, _fake = running_server
+    now = time.time()
+    cadence = 90.0  # the real collector's ~90s poll cadence
+    count = 1500  # ~37.5h of history at that cadence -- deliberately more
+    # than the page's default 24h lookback window, and (before this fix)
+    # enough points that a one-point-per-reading render would already be
+    # unreasonably large.
+    with Store(db_path=srv.db_path) as store:
+        store.upsert_location("pod-big", kind="pod", product_model="elements", seen_at=now)
+        for i in range(count):
+            ts = now - (count - 1 - i) * cadence
+            store.record_reading("pod-big", "temperature", float(i), timestamp=ts)
+
+    status, body = _get(srv, "/location/pod-big")
+    assert status == 200
+
+    section = body.split("<h3>temperature</h3>")[1]
+    match = re.search(r'points="([^"]+)"', section)
+    assert match is not None
+    points = match.group(1).split()
+    # Downsampled to the sparkline's point cap, not one point per reading.
+    assert len(points) <= 300
+    # The page stays a bounded size regardless of how many readings the
+    # store actually holds for this location.
+    assert len(body.encode("utf-8")) < 100_000
+
+
+def test_location_page_history_window_excludes_readings_older_than_the_default_lookback(
+    running_server,
+) -> None:
+    srv, _fake = running_server
+    now = time.time()
+    with Store(db_path=srv.db_path) as store:
+        store.upsert_location("pod-window", kind="pod", product_model="elements", seen_at=now)
+        # One reading well inside the default 24h window, one well outside it.
+        store.record_reading("pod-window", "temperature", 1.0, timestamp=now - 3600)
+        store.record_reading("pod-window", "temperature", 999.0, timestamp=now - (72 * 3600))
+
+    _status, body = _get(srv, "/location/pod-window")
+    # The 72h-old reading must not appear anywhere in the rendered page: not
+    # in "Latest readings" (it isn't the latest) and not in the sparkline
+    # (outside the default lookback window).
+    assert "999" not in body
+
+
+def test_api_history_defaults_to_a_bounded_limit_for_a_large_series(running_server) -> None:
+    srv, _fake = running_server
+    now = time.time()
+    count = _DEFAULT_API_HISTORY_LIMIT + 500
+    with Store(db_path=srv.db_path) as store:
+        store.upsert_location("pod-hist", kind="pod", product_model="elements", seen_at=now)
+        for i in range(count):
+            store.record_reading(
+                "pod-hist", "temperature", float(i), timestamp=now - (count - 1 - i)
+            )
+
+    status, body = _get(srv, "/api/history?location=pod-hist&field=temperature")
+    assert status == 200
+    payload = json.loads(body)
+    assert payload["limit"] == _DEFAULT_API_HISTORY_LIMIT
+    assert len(payload["readings"]) == _DEFAULT_API_HISTORY_LIMIT
+    # Bounded to the most *recent* readings -- the newest value survives.
+    assert payload["readings"][-1]["value"] == float(count - 1)
+
+
+def test_api_history_limit_query_param_is_honored(running_server) -> None:
+    srv, _fake = running_server
+    now = time.time()
+    with Store(db_path=srv.db_path) as store:
+        store.upsert_location("pod-hist2", kind="pod", product_model="elements", seen_at=now)
+        for i in range(20):
+            store.record_reading("pod-hist2", "temperature", float(i), timestamp=now - (20 - i))
+
+    status, body = _get(srv, "/api/history?location=pod-hist2&field=temperature&limit=5")
+    assert status == 200
+    payload = json.loads(body)
+    assert payload["limit"] == 5
+    assert [r["value"] for r in payload["readings"]] == [15.0, 16.0, 17.0, 18.0, 19.0]
+
+
+def test_api_history_limit_is_capped_regardless_of_what_the_caller_asks_for(
+    running_server,
+) -> None:
+    srv, _fake = running_server
+    status, body = _get(srv, "/api/history?location=pod-1&field=temperature&limit=999999999")
+    assert status == 200
+    payload = json.loads(body)
+    assert payload["limit"] < 999999999
+
+
+def test_api_history_rejects_a_non_positive_limit(running_server) -> None:
+    srv, _fake = running_server
+    status, _body = _get(srv, "/api/history?location=pod-1&field=temperature&limit=0")
+    assert status == 400
+
+
+def test_api_history_rejects_a_non_integer_limit(running_server) -> None:
+    srv, _fake = running_server
+    status, _body = _get(srv, "/api/history?location=pod-1&field=temperature&limit=abc")
+    assert status == 400
+
+
+def test_api_history_rejects_a_non_numeric_since(running_server) -> None:
+    srv, _fake = running_server
+    status, _body = _get(srv, "/api/history?location=pod-1&field=temperature&since=not-a-number")
     assert status == 400
 
 
@@ -341,3 +484,84 @@ def test_api_set_without_token_is_rejected(running_server) -> None:
     payload = json.loads(body)
     assert "error" in payload
     assert fake.calls == []
+
+
+# --- POST body size limits (Qodo review 3581287840) -------------------------
+
+
+def test_post_missing_content_length_is_rejected_411(running_server) -> None:
+    srv, fake = running_server
+    status, _body = _raw_post(
+        srv, "/control", headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
+    assert status == 411
+    assert fake.calls == []
+
+
+def test_post_non_integer_content_length_is_rejected_400(running_server) -> None:
+    srv, fake = running_server
+    status, _body = _raw_post(
+        srv,
+        "/control",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Length": "not-a-number",
+        },
+    )
+    assert status == 400
+    assert fake.calls == []
+
+
+def test_post_negative_content_length_is_rejected_400(running_server) -> None:
+    srv, fake = running_server
+    status, _body = _raw_post(
+        srv,
+        "/control",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Length": "-1",
+        },
+    )
+    assert status == 400
+    assert fake.calls == []
+
+
+def test_post_body_over_the_max_is_rejected_413_without_reading_it(running_server) -> None:
+    srv, fake = running_server
+    status, _body = _raw_post(
+        srv,
+        "/control",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Length": str(MAX_POST_BYTES + 1),
+        },
+        # Deliberately zero actual body bytes: if the handler ever tried to
+        # `rfile.read(length)` here, it would block waiting on bytes that
+        # never arrive and this test would hang/time out instead of pass --
+        # the 413 has to come back *before* any read of the body.
+    )
+    assert status == 413
+    assert fake.calls == []
+
+
+def test_post_body_at_exactly_the_max_is_accepted(running_server) -> None:
+    srv, fake = running_server
+    form_base = {"pod_id": "pod-1", "mode": "cool", "token": _TOKEN}
+    base_body = urlencode(form_base).encode("utf-8")
+    prefix = base_body + b"&pad="
+    padded = prefix + b"x" * (MAX_POST_BYTES - len(prefix))
+    assert len(padded) == MAX_POST_BYTES
+
+    status, _body = _raw_post(
+        srv,
+        "/control",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Length": str(len(padded)),
+        },
+        body=padded,
+    )
+    assert status == 200
+    # Read-only dry run: exactly one get_pod call, zero writes -- proves the
+    # (accepted, boundary-sized) body was actually parsed correctly.
+    assert fake.calls == ["get_pod"]

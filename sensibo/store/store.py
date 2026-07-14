@@ -295,15 +295,26 @@ class Store:
         *,
         since: Timestamp | None = None,
         until: Timestamp | None = None,
+        limit: int | None = None,
     ) -> list[ReadingRecord]:
         """Readings for one field at one location, ordered oldest to newest.
 
         ``since``/``until`` are inclusive bounds; omit either (or both) for
         an open-ended range.
+
+        ``limit``, if given, bounds the result to the ``limit`` *most
+        recent* readings within that range — applied SQL-side (an inner
+        ``ORDER BY timestamp DESC LIMIT ?``, re-sorted ascending by an outer
+        query), never a Python-side ``fetchall()``-then-slice. That
+        distinction is the fix for Qodo review 3581287838: a store holding
+        months of ~90s-cadence history must never have to materialise every
+        row it has ever seen just to hand a caller the most recent handful.
+        ``None`` (the default) stays unbounded, so every pre-existing caller
+        keeps its current behaviour unchanged.
         """
         since_ts = _normalize_timestamp(since) if since is not None else None
         until_ts = _normalize_timestamp(until) if until is not None else None
-        sql, params = _build_range_query(location_id, field, since_ts, until_ts)
+        sql, params = _build_range_query(location_id, field, since_ts, until_ts, limit)
         rows = self._conn.execute(sql, params).fetchall()
         return [_row_to_reading(row) for row in rows]
 
@@ -347,13 +358,63 @@ class Store:
 
 
 def _build_range_query(
-    location_id: str, field: str, since_ts: float | None, until_ts: float | None
+    location_id: str,
+    field: str,
+    since_ts: float | None,
+    until_ts: float | None,
+    limit: int | None = None,
 ) -> tuple[str, tuple[Any, ...]]:
     """Build the (sql, params) pair for `query_range`.
 
     Each branch is a complete literal query — no runtime string
     concatenation of SQL text — so the shape stays parameterised and static.
+
+    When `limit` is given, the *inner* query orders newest-first and caps
+    there with `LIMIT ?` (SQL-side bounding), and an outer query re-sorts
+    that already-bounded result set back to oldest-first — a store never
+    fetches more rows than `limit` regardless of how much history exists.
     """
+    if limit is not None:
+        if since_ts is not None and until_ts is not None:
+            sql = (
+                "SELECT location_id, field, timestamp, value_numeric, value_text, unit FROM ("
+                "SELECT location_id, field, timestamp, value_numeric, value_text, unit "
+                "FROM readings "
+                "WHERE location_id = ? AND field = ? AND timestamp >= ? AND timestamp <= ? "
+                "ORDER BY timestamp DESC LIMIT ?"
+                ") ORDER BY timestamp ASC"
+            )
+            return sql, (location_id, field, since_ts, until_ts, limit)
+        if since_ts is not None:
+            sql = (
+                "SELECT location_id, field, timestamp, value_numeric, value_text, unit FROM ("
+                "SELECT location_id, field, timestamp, value_numeric, value_text, unit "
+                "FROM readings "
+                "WHERE location_id = ? AND field = ? AND timestamp >= ? "
+                "ORDER BY timestamp DESC LIMIT ?"
+                ") ORDER BY timestamp ASC"
+            )
+            return sql, (location_id, field, since_ts, limit)
+        if until_ts is not None:
+            sql = (
+                "SELECT location_id, field, timestamp, value_numeric, value_text, unit FROM ("
+                "SELECT location_id, field, timestamp, value_numeric, value_text, unit "
+                "FROM readings "
+                "WHERE location_id = ? AND field = ? AND timestamp <= ? "
+                "ORDER BY timestamp DESC LIMIT ?"
+                ") ORDER BY timestamp ASC"
+            )
+            return sql, (location_id, field, until_ts, limit)
+        sql = (
+            "SELECT location_id, field, timestamp, value_numeric, value_text, unit FROM ("
+            "SELECT location_id, field, timestamp, value_numeric, value_text, unit "
+            "FROM readings "
+            "WHERE location_id = ? AND field = ? "
+            "ORDER BY timestamp DESC LIMIT ?"
+            ") ORDER BY timestamp ASC"
+        )
+        return sql, (location_id, field, limit)
+
     if since_ts is not None and until_ts is not None:
         sql = (
             "SELECT location_id, field, timestamp, value_numeric, value_text, unit "
