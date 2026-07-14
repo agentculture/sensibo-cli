@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-14
+
+The full product ([#1](https://github.com/agentculture/sensibo-cli/issues/1)):
+all three pillars plus the integration surfaces, built from the converged
+devague spec/plan (14 tasks in 4 waves, one agent per task, TDD-gated merges)
+and acceptance-tested against a real fleet (`docs/walkthrough.md`).
+
+### Added
+
+- **`sensibo/api/`** — stdlib-only Sensibo cloud client: key resolution
+  (`SENSIBO_API_KEY`, then `~/.sensibo/.env`), gzip everywhere, 429 backoff
+  with jitter, client-side pacing, apiKey scrubbing on every error path, and
+  thin wrappers for every documented endpoint.
+- **`sensibo/store/`** — the retention thesis: SQLite time-series store,
+  field-flexible per model (pm25 unit branches on `productModel`), Room
+  Sensors as first-class locations, ≥2-year retention with `prune()`, offline
+  queries, and operator aliases that never rewrite history.
+- **Control**: `sensibo set` — dry-run by default, `--apply` commits; single
+  field via PATCH, multi-field via POST, always read back.
+- **Collection**: `sensibo collect` (`--once`/`--daemon`, cadence ≥60s, one
+  fleet call per cycle; first run probes `historicalMeasurements` descending
+  and backfills the largest permitted window — empirically `days=1` on this
+  account), `sensibo query` (offline: latest/range/locations), `sensibo room`
+  (list with staleness flags; `name` aliases the main unit and each Room
+  Sensor by stable id).
+- **Automation**: `sensibo rule` — local declarative rules engine with
+  cross-room conditions resolved by room name, per-pod minimum off-time so a
+  flapping condition cannot short-cycle a compressor, and an
+  arm-requires-dry-run gate; `sensibo smartmode` / `schedule` / `timer` wrap
+  Sensibo's cloud engine and mark every output cloud-executed.
+- **Integration surfaces**: the documented `import sensibo` public API
+  (`docs/api.md`, zero argparse), `sensibo mcp serve` behind the optional
+  `sensibo-cli[mcp]` extra (`docs/mcp.md`), and `sensibo web` — a stdlib LAN
+  dashboard with open reads and token-gated writes (`docs/web.md`).
+- **`docs/walkthrough.md`** — the real-fleet acceptance record.
+
+### Changed
+
+- `learn`, `explain`, and the README now describe the shipped surface
+  (previously: scaffold).
+- One `ApiError` → `CliError` bridge (`_commands/_client.py`); HTTP 400/404
+  map to user errors, everything else to environment errors.
+
+### Fixed
+
+- `timer/` and `schedules/` are **v1** endpoints — the OpenAPI spec's v2
+  placement is wrong (v2 routes are server-level 404s; probed against the
+  real fleet). `timer show` treats the application-level 404 as "no timer
+  set", not an error.
+- `last_seen` derives from a location's own reading time, not the poll
+  instant — a Room Sensor dead since February now correctly flags STALE.
+- Gzipped HTTP error bodies are decompressed before landing in error
+  messages.
+
 ## [0.5.0] - 2026-07-14
 
 Documentation release, plus the CLI self-description fixes that documenting the

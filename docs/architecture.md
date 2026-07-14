@@ -36,6 +36,12 @@ The identity code makes the same trade: `whoami.read_agent_fields()` parses
 sensibo/
   __init__.py          __version__ from package metadata
   __main__.py          python -m sensibo
+  api/
+    __init__.py        public surface: SensiboClient, ApiError family, scrub helpers
+    _auth.py           key resolution: SENSIBO_API_KEY, then ~/.sensibo/.env
+    _errors.py         ApiError - mirrors CliError's shape, does not import it
+    _scrub.py          strip apiKey out of anything loggable
+    client.py          SensiboClient - gzip, 429 backoff, pacing, endpoint wrappers
   cli/
     __init__.py        parser construction, dispatch, error trapping
     _errors.py         CliError + the exit-code policy
@@ -98,21 +104,46 @@ AC state, the target state, and the diff — and changes nothing.
 
 ## Where the Sensibo code goes
 
-Not yet written. The intended shape:
-
-- **`sensibo/api/`** — a thin stdlib client. Owns the base URL, gzip, key
-  injection, 429 backoff, and **scrubbing the `apiKey` query parameter out of
-  anything loggable**. It is the only place that knows the key is in the URL.
-- **`sensibo/store/`** — the local time-series store. Must be schema-flexible:
-  sensor sets differ per model, so persist "whatever fields this pod reported",
-  and branch on `productModel` (the `pm25` unit trap in
+- **`sensibo/api/`** — **implemented.** A thin stdlib client
+  (`SensiboClient` in `sensibo/api/client.py`). Owns the base URL, gzip
+  (`Accept-Encoding: gzip`, transparent decode), key resolution and injection,
+  429 backoff with jitter (bounded retries), client-side pacing between
+  outbound calls, and **scrubbing the `apiKey` query parameter out of anything
+  loggable** (`sensibo/api/_scrub.py` — the only place that knows the key is
+  in the URL). Deliberately does not import from `sensibo/cli/`, so it is
+  usable as a standalone library ahead of any CLI verb landing on top of it.
+  Errors are `ApiError` (`sensibo/api/_errors.py`) — same `code` / `message`
+  / `remediation` shape as `CliError`, but a separate type: the CLI layer maps
+  one onto the other when the first verb built on this client lands.
+  `historicalMeasurements` HTTP 403 is raised as a typed
+  `GatedHistoryWindowError`, not a crash — see "History retention" in
+  [`sensibo-api.md`](sensibo-api.md).
+- **`sensibo/store/`** — the local time-series store. Not yet written. Must be
+  schema-flexible: sensor sets differ per model, so persist "whatever fields
+  this pod reported", and branch on `productModel` (the `pm25` unit trap in
   [`sensibo-api.md`](sensibo-api.md) is the reason).
-- **`sensibo/rules/`** — the local rules engine, last. Needs hysteresis and a
-  minimum off-time so a rule cannot short-cycle a compressor, and a "what would
-  this do right now?" inspection mode before a rule is armed.
+- **`sensibo/rules/`** — the local rules engine. **Implemented.** A rule is
+  declarative JSON (a name, a target pod, an `acState` action, and a tree of
+  conditions over current store readings — thresholds, time-of-day windows,
+  occupancy, and cross-room combinations addressing locations by name through
+  `sensibo.store.resolve_location`). It imports the store and the API client and
+  is imported by the CLI, but never imports `sensibo.cli` (same layering rule as
+  the store). Three safety properties are load-bearing and tested: a per-pod
+  minimum off-time / hysteresis (≥ 10 min, persisted across restarts) so a
+  flapping condition cannot short-cycle a compressor; at most one write per pod
+  per evaluation pass, through the API client's own rate limiting; and a rule
+  cannot be *armed* until a `rule dry-run` of its current definition has run —
+  editing the rule invalidates that fingerprint. Every rule and every
+  rule-verb output declares `execution: local (stops when this daemon stops)`,
+  the deliberate contrast with the cloud verbs (`smartmode`/`schedule`/`timer`).
+  `sensibo rule run` is the only verb that drives the AC, and only for armed
+  rules. A shipped example (`examples/cross-room-motion-temp.rule.json`) combines
+  motion in one room with temperature in another — something Climate React
+  cannot express.
 
-The key is read from `SENSIBO_API_KEY` in the environment. It is never read from
-a committed file and never echoed into output or logs.
+The key resolves as `SENSIBO_API_KEY` in the environment first, then
+`~/.sensibo/.env` (`sensibo/api/_auth.py`). It is never read from a committed
+file and never echoed into output, logs, exceptions, or reprs.
 
 ## Identity and the backend
 

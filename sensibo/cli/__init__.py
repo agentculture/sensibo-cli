@@ -63,10 +63,22 @@ def _argv_has_json(argv: list[str] | None) -> bool:
 
 def _build_parser() -> argparse.ArgumentParser:
     from sensibo.cli._commands import cli as _cli_group
+    from sensibo.cli._commands import collect as _collect_cmd
+    from sensibo.cli._commands import devices as _devices_cmd
     from sensibo.cli._commands import doctor as _doctor_cmd
     from sensibo.cli._commands import explain as _explain_cmd
     from sensibo.cli._commands import learn as _learn_cmd
+    from sensibo.cli._commands import mcp as _mcp_group
     from sensibo.cli._commands import overview as _overview_cmd
+    from sensibo.cli._commands import query as _query_group
+    from sensibo.cli._commands import read as _read_cmd
+    from sensibo.cli._commands import room as _room_group
+    from sensibo.cli._commands import rule as _rule_group
+    from sensibo.cli._commands import schedule as _schedule_group
+    from sensibo.cli._commands import set as _set_cmd
+    from sensibo.cli._commands import smartmode as _smartmode_group
+    from sensibo.cli._commands import timer as _timer_group
+    from sensibo.cli._commands import web as _web_cmd
     from sensibo.cli._commands import whoami as _whoami_cmd
 
     # prog is the *console command* (`sensibo`), not the dist name (`sensibo-cli`).
@@ -95,7 +107,19 @@ def _build_parser() -> argparse.ArgumentParser:
     _explain_cmd.register(sub)
     _overview_cmd.register(sub)
     _doctor_cmd.register(sub)
+    _collect_cmd.register(sub)
     _cli_group.register(sub)
+    _devices_cmd.register(sub)
+    _mcp_group.register(sub)
+    _query_group.register(sub)
+    _read_cmd.register(sub)
+    _room_group.register(sub)
+    _rule_group.register(sub)
+    _schedule_group.register(sub)
+    _set_cmd.register(sub)
+    _smartmode_group.register(sub)
+    _timer_group.register(sub)
+    _web_cmd.register(sub)
     # Register your own noun groups here:
     #   from sensibo.cli._commands import my_noun as _my_noun_group
     #   _my_noun_group.register(sub)

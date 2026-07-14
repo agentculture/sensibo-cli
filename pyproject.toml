@@ -1,6 +1,6 @@
 [project]
 name = "sensibo-cli"
-version = "0.5.0"
+version = "0.6.0"
 description = "Agent and CLI for Sensibo smart-AC control at home: discover devices, collect every sensor reading locally (temperature, humidity, air quality), and set up automated conditions that drive the AC (mode, target, fan, schedules, thresholds). Unofficial community tool; Sensibo is a trademark of Sensibo Ltd."
 readme = "README.md"
 license = "Apache-2.0"
@@ -14,6 +14,13 @@ classifiers = [
     "Intended Audience :: Developers",
 ]
 dependencies = []
+
+[project.optional-dependencies]
+# The MCP surface (`sensibo mcp serve`) is the ONLY thing allowed to need
+# this. The core CLI's `dependencies = []` above stays empty, deliberately
+# (docs/architecture.md, "Zero runtime dependencies, deliberately") — this
+# extra gates only its own surface. See sensibo/mcp_server/__init__.py.
+mcp = ["mcp>=1.0"]
 
 [project.urls]
 Homepage = "https://github.com/agentculture/sensibo-cli"
@@ -39,6 +46,10 @@ dev = [
     "isort>=5.12.0",
     "black>=23.7.0",
     "teken>=0.8",
+    # dev-only so the test suite can exercise `sensibo mcp serve`
+    # (sensibo/mcp_server/) without the core CLI depending on it — see the
+    # `mcp` extra above and sensibo/mcp_server/__init__.py.
+    "mcp>=1.0",
 ]
 
 [tool.coverage.run]

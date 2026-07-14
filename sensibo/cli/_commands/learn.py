@@ -10,11 +10,27 @@ import argparse
 
 from sensibo import __version__
 from sensibo.cli._output import emit_result
+from sensibo.explain.catalog import COMMAND_ORDER, SUMMARIES
 
 _DISCLAIMER = (
     "Unofficial community tool. Sensibo is a trademark of Sensibo Ltd; this "
     "project is not affiliated with, endorsed by, or supported by them."
 )
+
+
+def _command_map_lines() -> list[str]:
+    """Render the "Commands" block from the catalog's single source of truth.
+
+    Walks :data:`sensibo.explain.catalog.COMMAND_ORDER` instead of a second,
+    hand-maintained list — a manually maintained command list here is exactly
+    what drifted from the real verb surface as verbs landed (Qodo review
+    3581287831). A new verb adds one entry to the catalog and both this text
+    block and :func:`_as_json_payload`'s ``commands`` list pick it up.
+    """
+    rows = [(f"sensibo {' '.join(path)}", SUMMARIES[path]) for path in COMMAND_ORDER]
+    width = max(len(invocation) for invocation, _summary in rows) + 2
+    return [f"  {invocation.ljust(width)}{summary}" for invocation, summary in rows]
+
 
 _TEXT = f"""\
 sensibo — control Sensibo smart-AC devices from the command line.
@@ -31,24 +47,22 @@ Sensibo devices are cloud-only — there is no LAN-local API — so readings are
 polled from Sensibo's cloud and persisted locally. "Locally" means the data
 comes to rest on your machine, not that the transport avoids the internet.
 
-STATUS: scaffold. Only the introspection verbs below exist today. The AC
-control, collection, and automation verbs are not implemented yet.
+STATUS: all three pillars are shipped, plus the integration surfaces
+(Python import, MCP, LAN web dashboard).
 
 Commands
 --------
-  sensibo whoami             Identity from culture.yaml.
-  sensibo learn              This self-teaching prompt.
-  sensibo explain <path>...  Markdown docs for any noun/verb path.
-  sensibo overview           Descriptive snapshot of the agent.
-  sensibo doctor             Check the agent-identity invariants.
-  sensibo cli overview       Describe the CLI surface itself.
+{chr(10).join(_command_map_lines())}
 
 Note: the console command is `sensibo`. `sensibo-cli` is the PyPI dist name.
 
 Safety
 ------
-Every write verb will be dry-run by default; --apply commits. This tool drives
+Every write verb is dry-run by default; --apply commits. This tool drives
 air conditioners in a home, so a command that acts by accident is a bug.
+Local rules enforce a minimum off-time so they cannot short-cycle a
+compressor, and a rule cannot arm without a dry-run of its current
+definition.
 
 Machine-readable output
 -----------------------
@@ -80,17 +94,11 @@ def _as_json_payload() -> dict[str, object]:
         ),
         "disclaimer": _DISCLAIMER,
         "status": (
-            "scaffold — only the introspection verbs below are implemented; the AC "
-            "control, collection, and automation verbs do not exist yet"
+            "all three pillars are shipped (control, collection, automation), plus the "
+            "integration surfaces: Python import, MCP (sensibo-cli[mcp] extra), and the "
+            "LAN web dashboard"
         ),
-        "commands": [
-            {"path": ["whoami"], "summary": "Identity probe from culture.yaml."},
-            {"path": ["learn"], "summary": "Self-teaching prompt."},
-            {"path": ["explain"], "summary": "Markdown docs by path."},
-            {"path": ["overview"], "summary": "Descriptive snapshot of the agent."},
-            {"path": ["doctor"], "summary": "Check the agent-identity invariants."},
-            {"path": ["cli", "overview"], "summary": "Describe the CLI surface."},
-        ],
+        "commands": [{"path": list(path), "summary": SUMMARIES[path]} for path in COMMAND_ORDER],
         "exit_codes": {
             "0": "success",
             "1": "user-input error",

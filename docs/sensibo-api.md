@@ -1,8 +1,9 @@
 # The Sensibo API
 
 The reference this project builds on. Researched 2026-07-14 against Sensibo's
-official OpenAPI spec, Sensibo's own Python SDK, the Home Assistant integration,
-and `pysensibo`.
+official API documentation at <https://support.sensibo.com/api/> (the
+operator-supplied primary source), the official OpenAPI spec, Sensibo's own
+Python SDK, the Home Assistant integration, and `pysensibo`.
 
 **Every claim below is tagged with a confidence level.** Where something is
 unverified, it says so — do not promote a *likely* to a *confirmed* without
@@ -92,15 +93,19 @@ Relative to `/api/v2`:
 | `/pods/{id}/acStates` | GET, POST | **The control surface.** GET takes `limit` (max 20). POST body is `{"acState": {...}}`. |
 | `/pods/{id}/acStates/{property}` | PATCH | Change **one** property: `{"currentAcState": {...}, "newValue": ...}`. The safe way to toggle a single field. |
 | `/pods/{id}/smartmode` | GET, PUT, POST | Climate React — Sensibo's own server-side threshold automation. |
-| `/pods/{id}/timer/` | GET, PUT, DELETE | **Note the trailing slash.** |
-| `/pods/{id}/schedules/` | GET, POST | Trailing slash. Per-schedule ops at `/schedules/{schedule_id}/`. |
+| `/pods/{id}/timer/` | GET, PUT, DELETE | **Note the trailing slash. Lives under `/api/v1` (CONFIRMED)** — see below. |
+| `/pods/{id}/schedules/` | GET, POST | Trailing slash. **Lives under `/api/v1` (CONFIRMED)** — see below. Per-schedule ops at `/schedules/{schedule_id}/`. |
 | `/pods/{id}/events` | GET | Device events, with a documented event-code taxonomy. |
 | `/pods/{id}/measurements` | GET | ⚠️ **Undocumented.** Absent from the current OpenAPI spec, but present in Sensibo's *own* official Python SDK. It works, but **don't build on it** — see below. |
 
-**Known inconsistency (UNVERIFIED which is canonical):** the OpenAPI spec places
-`timer/` and `schedules/` under **v2**, but `pysensibo` calls them on **v1** and
-Home Assistant ships that in production. Both appear to work. Prefer the
-documented v2 path; be ready to fall back.
+**Resolved (CONFIRMED against the real fleet 2026-07-14):** `timer/` and
+`schedules/` live under **v1**, not v2 — the OpenAPI spec's v2 placement is
+wrong. Probed: both v2 routes return *server-level* HTML 404s; `GET
+/api/v1/pods/{id}/schedules/` returns 200 with real data, and `GET
+/api/v1/pods/{id}/timer/` returns an *application-level* 404 ("This pod does
+not have a timer") when no timer is set — a normal state, not an error.
+`pysensibo`/Home Assistant were right. The client routes these five calls
+through v1.
 
 Several further endpoints (`cleanFiltersNotification`, `calibration/`,
 `pureboost`) are undocumented but used in production by HA. They work; treat them
@@ -136,15 +141,27 @@ than ~60s (Home Assistant's battle-tested floor); back off on 429.
 
 - `historicalMeasurements` takes `days`, default 1. **Sensibo documents no
   maximum and no retention policy (CONFIRMED absence).**
-- **The window appears to be ~7 days (LIKELY, not confirmed).** The CRAN R client
-  `sensibo.sky` documents the parameter as "max 7 days". That is a third-party
-  implementation, not a Sensibo statement.
+- **Probed against the operator's real fleet on 2026-07-14 (CONFIRMED for this
+  account): `days=1` returns HTTP 200 with a ~90-second-granularity series;
+  every value ≥ 2 (2, 3, 4, 5, 6, 7, 30, 90, 365, 730) returns HTTP 403.** The
+  accessible window on this (non-Plus) account is exactly one day. The CRAN
+  `sensibo.sky` "max 7 days" claim did **not** hold here; a paid tier may raise
+  the limit (UNVERIFIED).
+- **Consequence for the collector:** backfill can recover at most the last day.
+  Two-year history is carried entirely by forward retention, and **a collection
+  gap longer than ~1 day is permanently lost data** — the collector needs an
+  always-on home.
+- **How the collector uses this (`sensibo collect`, task t6).** On a store's
+  first cycle it probes each pod through the descending ladder
+  `days=730, 365, 90, 30, 7, 1`, treating a 403 / `GatedHistoryWindowError` as
+  "window gated, try smaller" (never an error). It records the series from the
+  largest permitted window and persists the empirically found window into the
+  store's `meta` table (`backfill_window_days`), logging it to stderr — so the
+  runtime probe confirms this documented finding per account rather than
+  hard-coding it, and later runs skip the probe. On this account the probe
+  lands on `days=1`.
 - Don't conflate this with Sensibo Plus's advertised "30 days of event logs" —
   that is the *events* endpoint, not measurements.
-
-> **Action:** this is trivially falsifiable the moment we have an API key —
-> request `days=30` and see what comes back. **Do that before putting a number in
-> the README.**
 
 ## Per-model sensor sets
 
@@ -159,7 +176,7 @@ Keyed by the `productModel` field:
 | *all pods* | `temperature`, `humidity`, `feelsLike`, `acState`, `connectionStatus`, `firmwareVersion` | baseline |
 | **Sky / Sky Plus** | the baseline. No air quality. | Sky Plus can promote a Room Sensor to main sensor |
 | **Air** | temperature, humidity only | no AQ sensors |
-| **Air Pro** (`airq`) | + `tvoc` (ppb), `co2` (ppm) | **No PM2.5.** |
+| **Air Pro** (`airq`) | + `tvoc` (ppb), `co2` (ppm), `iaq`, `motion`, `roomIsOccupied`, `rssi` | **No PM2.5.** Field set CONFIRMED against the operator's real pod 2026-07-14. |
 | **Elements** (`elements`) | + `pm25` (µg/m³), `tvoc`, `co2`, `etoh`, `iaq` | real particulate sensor |
 | **Pure** (`pure`) | `pm25` — **as an AQI enum, not µg/m³** | no timer, no smartmode |
 | **Room Sensor** | `motion`, temperature, humidity, battery, rssi | **not a pod** — see below |
