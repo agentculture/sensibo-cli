@@ -64,7 +64,7 @@ def _parse_iso8601(value: str, flag: str) -> float:
     suffix (normalised to ``+00:00`` before parsing).
     """
     text = value.strip()
-    if text.endswith("Z") or text.endswith("z"):
+    if text.endswith(("Z", "z")):
         text = text[:-1] + "+00:00"
     try:
         dt = datetime.datetime.fromisoformat(text)

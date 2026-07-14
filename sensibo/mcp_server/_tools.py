@@ -98,7 +98,7 @@ def _reraise_api_error(err: ApiError) -> None:
 def _parse_iso8601(value: str, flag: str) -> float:
     """Parse an ISO 8601 timestamp into epoch seconds (UTC). Mirrors ``sensibo query``."""
     text = value.strip()
-    if text.endswith("Z") or text.endswith("z"):
+    if text.endswith(("Z", "z")):
         text = text[:-1] + "+00:00"
     try:
         dt = datetime.datetime.fromisoformat(text)
