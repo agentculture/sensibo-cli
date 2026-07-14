@@ -136,6 +136,36 @@ itself (distinct from the global `overview`, which describes the agent).
     sensibo cli overview --json
 """
 
+_QUERY = """\
+# sensibo query
+
+Offline reads from the local store. **Never touches the network** — every
+answer comes from the local sqlite file `sensibo collect` populates
+(`~/.sensibo/sensibo.db` by default, override with `--db` or `SENSIBO_DB`).
+
+An empty store or an unknown location id both fail with a remediation
+pointing at `sensibo collect` — that is the verb that populates what
+`query` reads.
+
+## Verbs
+
+- `sensibo query latest [<location-id>] [--field <name>]` — latest value(s)
+  per location/field; omit either to widen the match.
+- `sensibo query range <location-id> --field <name> [--since ISO8601] [--until ISO8601]`
+  — time-series rows, oldest first. `--since`/`--until` are **inclusive** on
+  both ends.
+- `sensibo query locations` — every known sensing location (pod or Room
+  Sensor) with kind, model, room name, alias (if set), and last-seen.
+
+## Usage
+
+    sensibo query latest --json
+    sensibo query latest pod-abc123 --field temperature
+    sensibo query range pod-abc123 --field temperature --since 2026-01-01 --json
+    sensibo query locations --json
+    sensibo query latest --db /path/to/sensibo.db
+"""
+
 
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
@@ -148,4 +178,8 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("doctor",): _DOCTOR,
     ("cli",): _CLI,
     ("cli", "overview"): _CLI,
+    ("query",): _QUERY,
+    ("query", "latest"): _QUERY,
+    ("query", "range"): _QUERY,
+    ("query", "locations"): _QUERY,
 }
