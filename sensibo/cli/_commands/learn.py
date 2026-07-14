@@ -31,8 +31,9 @@ Sensibo devices are cloud-only — there is no LAN-local API — so readings are
 polled from Sensibo's cloud and persisted locally. "Locally" means the data
 comes to rest on your machine, not that the transport avoids the internet.
 
-STATUS: scaffold. Only the introspection verbs below exist today. The AC
-control, collection, and automation verbs are not implemented yet.
+STATUS: the introspection verbs and the read-only fleet verbs (devices, read)
+exist today. AC control, collection, and automation verbs are not implemented
+yet.
 
 Commands
 --------
@@ -42,6 +43,8 @@ Commands
   sensibo overview           Descriptive snapshot of the agent.
   sensibo doctor             Check the agent-identity invariants.
   sensibo cli overview       Describe the CLI surface itself.
+  sensibo devices            List the fleet from one API call.
+  sensibo read <id>          One snapshot of every current reading.
 
 Note: the console command is `sensibo`. `sensibo-cli` is the PyPI dist name.
 
@@ -80,8 +83,8 @@ def _as_json_payload() -> dict[str, object]:
         ),
         "disclaimer": _DISCLAIMER,
         "status": (
-            "scaffold — only the introspection verbs below are implemented; the AC "
-            "control, collection, and automation verbs do not exist yet"
+            "the introspection verbs and the read-only fleet verbs (devices, read) are "
+            "implemented; the AC control, collection, and automation verbs do not exist yet"
         ),
         "commands": [
             {"path": ["whoami"], "summary": "Identity probe from culture.yaml."},
@@ -90,6 +93,11 @@ def _as_json_payload() -> dict[str, object]:
             {"path": ["overview"], "summary": "Descriptive snapshot of the agent."},
             {"path": ["doctor"], "summary": "Check the agent-identity invariants."},
             {"path": ["cli", "overview"], "summary": "Describe the CLI surface."},
+            {"path": ["devices"], "summary": "List the fleet from one API call."},
+            {
+                "path": ["read"],
+                "summary": "One snapshot of every current reading for a location.",
+            },
         ],
         "exit_codes": {
             "0": "success",

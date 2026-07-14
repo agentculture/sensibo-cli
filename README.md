@@ -7,10 +7,10 @@ that drive the AC.
 > **Unofficial community tool.** Sensibo is a trademark of Sensibo Ltd. This
 > project is not affiliated with, endorsed by, or supported by them.
 >
-> **Status: scaffold.** The CLI today ships only its introspection verbs
-> (`whoami`, `learn`, `explain`, `overview`, `doctor`). None of the AC control,
-> collection, or automation features exist yet. See the
-> [roadmap](docs/roadmap.md).
+> **Status: scaffold.** The CLI today ships its introspection verbs
+> (`whoami`, `learn`, `explain`, `overview`, `doctor`) plus two read-only fleet
+> verbs (`devices`, `read`). None of the AC control, collection, or automation
+> features exist yet. See the [roadmap](docs/roadmap.md).
 
 ## What it will do
 
@@ -77,10 +77,12 @@ uv run sensibo doctor           # agent-identity invariants
 The PyPI dist is `sensibo-cli`, the import package is `sensibo`, and the console
 command is **`sensibo`**.
 
-When the API-backed verbs land they will read the key from the environment:
+API-backed verbs read the key from the environment (then `~/.sensibo/.env`):
 
 ```bash
 export SENSIBO_API_KEY=...      # from https://home.sensibo.com/me/api
+uv run sensibo devices          # list the fleet, one API call
+uv run sensibo read <pod-id>    # every current reading for a location
 ```
 
 ## CLI
@@ -93,6 +95,8 @@ export SENSIBO_API_KEY=...      # from https://home.sensibo.com/me/api
 | `overview` | Read-only descriptive snapshot of the agent. |
 | `doctor` | Check the agent-identity invariants. |
 | `cli overview` | Describe the CLI surface itself. |
+| `devices` | List the fleet — pods and nested Room Sensors — from one API call. |
+| `read <id>` | One snapshot of every current reading for a pod or Room Sensor id. |
 
 Every command supports `--json`. Results go to stdout, errors and diagnostics to
 stderr — never mixed. Exit codes: `0` success, `1` user error, `2` environment
