@@ -24,8 +24,9 @@ The console command is `sensibo`. `sensibo-cli` is the PyPI dist name.
 
 ## Status: scaffold
 
-Only the introspection verbs below are implemented. The AC control, collection,
-and automation verbs do not exist yet.
+The introspection verbs and the read-only fleet verbs (`devices`, `read`)
+below are implemented. AC control, collection, and automation verbs do not
+exist yet.
 
 ## "Locally"
 
@@ -47,6 +48,8 @@ air conditioners in a home, so a command that acts by accident is a bug.
 - `sensibo overview` — descriptive snapshot of the agent.
 - `sensibo doctor` — check the agent-identity invariants.
 - `sensibo cli overview` — describe the CLI surface.
+- `sensibo devices` — list the fleet from one API call.
+- `sensibo read <id>` — one snapshot of every current reading for a location.
 
 ## Exit-code policy
 
@@ -136,6 +139,57 @@ itself (distinct from the global `overview`, which describes the agent).
     sensibo cli overview --json
 """
 
+_DEVICES = """\
+# sensibo devices
+
+Lists the fleet from exactly one API call
+(`GET /users/me/pods?fields=*`, never one request per device). Per pod: its
+id, `productModel`, Sensibo room name, connection status, and the sensor
+field names it actually reports — derived from the keys present in that
+pod's own measurements, never a hardcoded schema, so a model this tool has
+never seen still lists honestly.
+
+Room Sensors are **not pods** — they are BLE satellites nested inside their
+parent pod's `motionSensors[]` with a stable `ms_*` id. They are listed as
+sensing locations under their parent, with their own fields and a derived
+`lastSeen` (the instant of this snapshot, when the sensor reported at least
+one current reading; `null`/`unknown` otherwise — Sensibo's API carries no
+per-field timestamp to read this from).
+
+Read-only.
+
+## Usage
+
+    sensibo devices
+    sensibo devices --json
+
+## See also
+
+- `sensibo explain read`
+"""
+
+_READ = """\
+# sensibo read <pod-or-location-id>
+
+One snapshot of every current reading for a location, from the same
+single-call fleet poll `sensibo devices` uses. Accepts either:
+
+- a **pod** id — prints every field in that pod's own measurements, plus each
+  of its nested Room Sensors' own readings (`motionSensors`); or
+- a **Room Sensor** `ms_*` id — prints just that sensor's own readings.
+
+Unknown ids fail with a `hint:` pointing at `sensibo devices`. Read-only.
+
+## Usage
+
+    sensibo read <id>
+    sensibo read <id> --json
+
+## See also
+
+- `sensibo explain devices`
+"""
+
 
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
@@ -148,4 +202,6 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("doctor",): _DOCTOR,
     ("cli",): _CLI,
     ("cli", "overview"): _CLI,
+    ("devices",): _DEVICES,
+    ("read",): _READ,
 }
