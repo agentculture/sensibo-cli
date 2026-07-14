@@ -4,7 +4,7 @@
   "schema_version": 2,
   "status": "exported",
   "created": "2026-07-14T15:04:14Z",
-  "updated": "2026-07-14T15:16:12Z",
+  "updated": "2026-07-14T15:29:52Z",
   "claims": [
     {
       "id": "c1",
@@ -365,6 +365,24 @@
       "hard_questions": [],
       "links": [],
       "instruction": ""
+    },
+    {
+      "id": "c21",
+      "kind": "requirement",
+      "text": "Every sensing location gets an operator-chosen room name - the main unit and each Room Sensor - and readings, queries, rules, and the dashboard address locations by that name.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h20",
+          "text": "Names are local aliases keyed on stable ids (pod uid, ms_* id): devices/read/query/rules/web all render and accept them, and renaming preserves continuity of historical data.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "Ship sensibo room verbs: list every sensing location (main unit and each Room Sensor, keyed by stable id) and assign a persistent operator-chosen name; resolve names at display time so a rename never orphans history."
     }
   ],
   "open_vagueness": [

@@ -42,6 +42,9 @@
   - honesty: A browser on another machine on the LAN can view live readings and history charts served entirely from the local store, and control actions go through the same safety contract.
 - Safety contract: every write verb is dry-run by default and --apply commits; rules enforce a minimum off-time and hysteresis; outbound calls are rate-limited; what a rule would do right now is inspectable before it is armed.
   - honesty: A rules-engine test proves a flapping condition cannot cycle the compressor faster than the minimum off-time.
+- Every sensing location gets an operator-chosen room name - the main unit and each Room Sensor - and readings, queries, rules, and the dashboard address locations by that name.
+  - instruction: Ship sensibo room verbs: list every sensing location (main unit and each Room Sensor, keyed by stable id) and assign a persistent operator-chosen name; resolve names at display time so a rename never orphans history.
+  - honesty: Names are local aliases keyed on stable ids (pod uid, ms_* id): devices/read/query/rules/web all render and accept them, and renaming preserves continuity of historical data.
 
 ## Honesty conditions
 
@@ -79,8 +82,11 @@
 Resolved operator decisions (recorded via `devague question`, resolved 2026-07-14):
 
 - **Two years of history** means local retention of at least two years going
-  forward; the first run backfills whatever the cloud actually returns (probe
-  `days=730/90/30/7`). Cloud-side two-year backfill is *not* a requirement.
+  forward; the first run backfills whatever the cloud actually returns. Probed
+  empirically 2026-07-14: **the accessible window on this account is exactly
+  `days=1`** — every value ≥ 2 returns HTTP 403. Cloud-side backfill beyond one
+  day is impossible here; forward retention carries the requirement, and a
+  collection gap longer than a day is permanently lost data.
 - **Web dashboard access:** open reads on the LAN, token-gated writes.
 - **MCP transport:** the official `mcp` SDK behind the optional extra
   `sensibo-cli[mcp]`; the core CLI stays zero-runtime-dependency.
@@ -88,6 +94,11 @@ Resolved operator decisions (recorded via `devague question`, resolved 2026-07-1
   chmod 600). Resolution order: `SENSIBO_API_KEY` environment variable first,
   then `~/.sensibo/.env`. A repo-local `.env` stays gitignored and is
   transitional only - never committed, never echoed.
+- **Operator fleet (probed 2026-07-14):** one `airq` main unit (reports
+  temperature, humidity, feelsLike, motion, roomIsOccupied, tvoc, co2, iaq,
+  rssi) plus two Room Sensors surfacing as `motionSensors[]` entries with
+  stable `ms_*` ids under `parentDeviceUid`. Room Sensor `ms_o7dH4GeY` (serial
+  R332300175) last reported 2026-02-10 — likely offline or battery-dead.
 
 ## Hard questions
 

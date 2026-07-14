@@ -1,0 +1,518 @@
+{
+  "slug": "sensibo-cli-ships-the-full-product-one-cli-and-age",
+  "title": "sensibo-cli ships the full product: one CLI and agent fully controls every Sensibo AC at home, every sensor reading lands in a local time-series store with two years of history, automated conditions drive the AC, and bigger apps connect through a Python import, an MCP server, and a website on the home network.",
+  "frame_slug": "sensibo-cli-ships-the-full-product-one-cli-and-age",
+  "schema_version": 2,
+  "status": "exported",
+  "created": "2026-07-14T15:20:47Z",
+  "updated": "2026-07-14T15:31:25Z",
+  "targets": [
+    {
+      "id": "c1",
+      "kind": "announcement",
+      "text": "sensibo-cli ships the full product: one CLI and agent fully controls every Sensibo AC at home, every sensor reading lands in a local time-series store with two years of history, automated conditions drive the AC, and bigger apps connect through a Python import, an MCP server, and a website on the home network."
+    },
+    {
+      "id": "h11",
+      "kind": "honesty",
+      "text": "Every pillar named in the announcement is demonstrable end-to-end against the real fleet - none of it mocked."
+    },
+    {
+      "id": "c2",
+      "kind": "audience",
+      "text": "The home operator and the AI agents acting for them: Claude Code and mesh agents driving the CLI in loops, MCP clients, Python importers, and household members using the LAN website."
+    },
+    {
+      "id": "h13",
+      "kind": "honesty",
+      "text": "Every named audience exercises its surface in acceptance: an agent drives the CLI with --json, an MCP client connects, a script imports the package, a LAN browser loads the dashboard."
+    },
+    {
+      "id": "c3",
+      "kind": "before_state",
+      "text": "The repo is a scaffold: only introspection verbs ship; control happens only in the Sensibo app; sensor history lives in the Sensibo cloud behind an accessible window that is likely about 7 days."
+    },
+    {
+      "id": "h14",
+      "kind": "honesty",
+      "text": "The before-state is as described: at frame time the repo ships only introspection verbs, with no control, collect, or rules code."
+    },
+    {
+      "id": "c4",
+      "kind": "after_state",
+      "text": "The operator fully controls Sensibo from the CLI, sensor data is collected into a local store reaching two years of history, automated conditions drive the AC, and bigger apps connect via Python import, MCP, and a website on the network."
+    },
+    {
+      "id": "h12",
+      "kind": "honesty",
+      "text": "Each after-state leg (control, collection, automation, import, MCP, web) has at least one passing end-to-end demonstration recorded in the docs."
+    },
+    {
+      "id": "c5",
+      "kind": "why_it_matters",
+      "text": "Data the operator owns outlives the vendor window; AC control becomes scriptable by agents; automations can express what the Sensibo engine cannot: multi-room logic, air-quality-driven cooling, occupancy plus time-of-day."
+    },
+    {
+      "id": "h15",
+      "kind": "honesty",
+      "text": "The differentiators are real: at least one shipped rule expresses a condition Climate React cannot (cross-room motion plus temperature), and the local store answers a query offline with the cloud unreachable."
+    },
+    {
+      "id": "c6",
+      "kind": "boundary",
+      "text": "Cloud transport only: there is no LAN-local Sensibo protocol (verified). Local means where the data lives, never the wire, and no doc may imply otherwise."
+    },
+    {
+      "id": "h16",
+      "kind": "honesty",
+      "text": "No doc, help text, or learn output implies a LAN-local Sensibo protocol; the cloud-only finding stays in docs/sensibo-api.md with its evidence."
+    },
+    {
+      "id": "c7",
+      "kind": "boundary",
+      "text": "Unofficial community tool. Sensibo is a trademark of Sensibo Ltd; the disclaimer stays in the README and in learn output."
+    },
+    {
+      "id": "h17",
+      "kind": "honesty",
+      "text": "test_learn_carries_the_trademark_disclaimer stays green and the README keeps the unofficial-tool disclaimer."
+    },
+    {
+      "id": "c8",
+      "kind": "boundary",
+      "text": "Not a general home-automation platform: no non-Sensibo devices, no Home Assistant replacement. Rules read Sensibo sensors and drive Sensibo ACs only."
+    },
+    {
+      "id": "h18",
+      "kind": "honesty",
+      "text": "The CLI grows no verbs targeting non-Sensibo devices; rules reference Sensibo pods and their sensors only."
+    },
+    {
+      "id": "c9",
+      "kind": "requirement",
+      "text": "Full AC control: power, mode, target temperature, fan speed, swing - per device and across the whole house."
+    },
+    {
+      "id": "h1",
+      "kind": "honesty",
+      "text": "Verified against a real device: each control field round-trips (set, then read back), and a write without --apply changes nothing on the unit."
+    },
+    {
+      "id": "c10",
+      "kind": "requirement",
+      "text": "A collector polls on a cadence and persists every reading each pod reports into a local time-series store the operator can query offline."
+    },
+    {
+      "id": "h2",
+      "kind": "honesty",
+      "text": "No hardcoded schema: the collector stores whatever fields the pod reports, branches pm25 on productModel (AQI enum on Pure vs micrograms on Elements), and captures Room Sensor readings nested in motionSensors."
+    },
+    {
+      "id": "c11",
+      "kind": "requirement",
+      "text": "Sensor history reaches two years back."
+    },
+    {
+      "id": "h3",
+      "kind": "honesty",
+      "text": "Two years is honest: either an empirical probe shows the cloud backfill window reaches that far, or the spec explicitly redefines it as local retention of at least two years going forward plus best-effort backfill of whatever the cloud returns."
+    },
+    {
+      "id": "c12",
+      "kind": "requirement",
+      "text": "Automated conditions drive the AC - thresholds, schedules, occupancy, multi-room logic - both by managing the server-side Climate React and schedules, and via a local rules engine."
+    },
+    {
+      "id": "h4",
+      "kind": "honesty",
+      "text": "Every rule states whether it runs in the Sensibo cloud (survives the laptop sleeping) or in the local daemon (does not), and no rule arms without a dry-run preview of what it would do right now."
+    },
+    {
+      "id": "c13",
+      "kind": "requirement",
+      "text": "Bigger apps connect via Python import: the sensibo package exposes a documented public API usable without the CLI."
+    },
+    {
+      "id": "h5",
+      "kind": "honesty",
+      "text": "A third-party script can import sensibo, list pods, read measurements, and set AC state without touching argparse or the console command."
+    },
+    {
+      "id": "c14",
+      "kind": "requirement",
+      "text": "Bigger apps connect via MCP: an MCP server exposes the same read and control capabilities as tools."
+    },
+    {
+      "id": "h6",
+      "kind": "honesty",
+      "text": "An MCP client can list devices, read sensors, and set AC state, and MCP write tools honor the same dry-run-then-apply contract as the CLI."
+    },
+    {
+      "id": "c15",
+      "kind": "requirement",
+      "text": "Bigger apps connect via a website on the home network: live readings, history, and control from a browser on the LAN."
+    },
+    {
+      "id": "h7",
+      "kind": "honesty",
+      "text": "A browser on another machine on the LAN can view live readings and history charts served entirely from the local store, and control actions go through the same safety contract."
+    },
+    {
+      "id": "c16",
+      "kind": "requirement",
+      "text": "Safety contract: every write verb is dry-run by default and --apply commits; rules enforce a minimum off-time and hysteresis; outbound calls are rate-limited; what a rule would do right now is inspectable before it is armed."
+    },
+    {
+      "id": "h8",
+      "kind": "honesty",
+      "text": "A rules-engine test proves a flapping condition cannot cycle the compressor faster than the minimum off-time."
+    },
+    {
+      "id": "c20",
+      "kind": "success_signal",
+      "text": "From a fresh install with only SENSIBO_API_KEY set: sensibo devices lists the fleet with per-model sensors; collect runs on a cadence and an offline query answers from the local store; a rule dry-runs, arms, and drives the AC without short-cycling; an MCP client sets a target temperature; a browser on another LAN machine shows live readings and history."
+    },
+    {
+      "id": "h19",
+      "kind": "honesty",
+      "text": "The success walkthrough is scripted in the docs and every step passes against the real fleet, not mocks."
+    },
+    {
+      "id": "c21",
+      "kind": "requirement",
+      "text": "Every sensing location gets an operator-chosen room name - the main unit and each Room Sensor - and readings, queries, rules, and the dashboard address locations by that name."
+    },
+    {
+      "id": "h20",
+      "kind": "honesty",
+      "text": "Names are local aliases keyed on stable ids (pod uid, ms_* id): devices/read/query/rules/web all render and accept them, and renaming preserves continuity of historical data."
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t1",
+      "summary": "API client core: stdlib urllib client with key resolution, gzip, backoff, scrubbing",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "Key resolves SENSIBO_API_KEY env var first, then ~/.sensibo/.env; a test proves the order and that a missing key raises CliError with remediation",
+        "Every request sends Accept-Encoding: gzip; 429 triggers exponential backoff with jitter; outbound calls are rate-limited client-side",
+        "No apiKey value ever appears in exceptions, logs, or --json output: a test asserts URL scrubbing",
+        "Fleet poll is a single GET /users/me/pods?fields=* call - a test fails if any code path loops per device for current readings"
+      ],
+      "deps": [],
+      "covers": [
+        "c16"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t2",
+      "summary": "SQLite store: flexible per-model schema, 2-year retention, offline query API",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "Readings are keyed on pod and timestamp with flexible field storage; a pod reporting a never-seen field stores it without schema migration",
+        "pm25 is stored with a unit tag derived from productModel (AQI enum on Pure, micrograms on Elements); a test covers both branches",
+        "Retention defaults to at least two years and is configurable; pruning never touches data newer than the window",
+        "A store query answers with the network unreachable (test monkeypatches socket to fail)"
+      ],
+      "deps": [],
+      "covers": [
+        "c11"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t3",
+      "summary": "Boundary and positioning docs: trademark, cloud-only, scope, before-state evidence",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "test_learn_carries_the_trademark_disclaimer stays green; README keeps the unofficial-tool disclaimer",
+        "No doc, help text, or learn output implies a LAN-local Sensibo protocol; docs/sensibo-api.md keeps the cloud-only finding with evidence",
+        "The before-state (scaffold with only introspection verbs at frame time) is recorded in the docs with the frame commit hash",
+        "A grep-based test asserts no CLI verb or rule references non-Sensibo devices"
+      ],
+      "deps": [],
+      "covers": [
+        "c3",
+        "h14",
+        "c6",
+        "h16",
+        "c7",
+        "h17",
+        "c8",
+        "h18"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t4",
+      "summary": "devices and read verbs: list the fleet, snapshot every current reading",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "sensibo devices lists every pod with model and the sensor fields it actually reports, from one API call; --json emits machine-readable output",
+        "sensibo read <pod> prints one snapshot of every current reading including nested motionSensors from Room Sensors",
+        "Both verbs have explain catalog entries and teken cli doctor . --strict stays green"
+      ],
+      "deps": [
+        "t1"
+      ],
+      "covers": [
+        "c2"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t5",
+      "summary": "set verb: full AC control, dry-run by default",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "sensibo set supports --power --mode --target --fan --swing per device plus an all-devices selector",
+        "Without --apply the verb prints exactly what it would change and a test proves zero HTTP writes happen; with --apply it POSTs acStates or PATCHes a single property",
+        "Set-then-read-back verification against a real device is scripted and passes",
+        "Explain catalog entry present; doctor strict green"
+      ],
+      "deps": [
+        "t1"
+      ],
+      "covers": [
+        "c9",
+        "h1",
+        "c16"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t6",
+      "summary": "collect verb: cadence polling, historical backfill probe, upsert to store",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "sensibo collect polls GET /users/me/pods?fields=* on a cadence >=60s and upserts every reported field into the store",
+        "First run probes historicalMeasurements at days=730/90/30/7, backfills everything returned, and records the empirically found window in docs/sensibo-api.md",
+        "pm25 branches on productModel before storage; a test covers Pure vs Elements",
+        "A collect cycle against a mocked 429 backs off and completes; explain entry present, doctor green",
+        "Backfill probes descending windows and treats 403 as a gated window, not an error: it uses the largest permitted days value (empirically 1 on this account) and records the finding"
+      ],
+      "deps": [
+        "t1",
+        "t2"
+      ],
+      "covers": [
+        "c10",
+        "h2",
+        "c11",
+        "h3"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t7",
+      "summary": "query verb: offline reads from the local store",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "sensibo query answers time-range and latest-value questions from SQLite with the network disabled (test enforces no socket use)",
+        "Output is stdout-only results with --json; explain entry present, doctor green"
+      ],
+      "deps": [
+        "t2"
+      ],
+      "covers": [
+        "c10",
+        "h15"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t8",
+      "summary": "cloud automation verbs: smartmode, schedule, timer wrappers",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "sensibo smartmode / schedule / timer read and write Sensibo server-side automation; writes are dry-run by default with --apply",
+        "Output marks these as cloud-executed (survive the local daemon sleeping)",
+        "Explain entries present; doctor strict green"
+      ],
+      "deps": [
+        "t1"
+      ],
+      "covers": [
+        "c12",
+        "h4"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t9",
+      "summary": "local rules engine: conditions over collected sensors drive the AC safely",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "Rules express thresholds, schedules, occupancy, and cross-room conditions; one shipped example combines motion in one room with temperature in another - something Climate React cannot express",
+        "A flapping-condition test proves the engine cannot cycle a compressor faster than the configured minimum off-time (hysteresis)",
+        "sensibo rule dry-run shows exactly what an unarmed rule would do right now; a rule cannot arm without it",
+        "Every rule declares local execution in its definition and output (contrast with cloud verbs); rules reference Sensibo pods only"
+      ],
+      "deps": [
+        "t2",
+        "t5"
+      ],
+      "covers": [
+        "c12",
+        "h4",
+        "c16",
+        "h8",
+        "c5",
+        "h15"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t10",
+      "summary": "public import surface: documented client API usable without the CLI",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "A third-party script can import sensibo, list pods, read measurements and history, and set AC state with zero argparse or CLI imports (test asserts no cli module import)",
+        "The public API is documented in docs with runnable examples"
+      ],
+      "deps": [
+        "t1"
+      ],
+      "covers": [
+        "c13",
+        "h5"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t11",
+      "summary": "MCP server behind the optional extra sensibo-cli[mcp]",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "pip install sensibo-cli leaves the core zero-dep and sensibo --help works; the mcp extra pulls the official SDK and only gates its own surface",
+        "sensibo mcp serve exposes stdio tools to list devices, read sensors, read history, and set AC state; write tools take apply defaulting to false",
+        "An MCP client end-to-end test lists devices and sets a target temperature through the tool"
+      ],
+      "deps": [
+        "t10"
+      ],
+      "covers": [
+        "c14",
+        "h6"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t12",
+      "summary": "web dashboard on stdlib http.server: LAN reads open, writes token-gated",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "sensibo web --bind serves live readings and history charts rendered entirely from the local store (test: pages load with cloud unreachable)",
+        "Control POSTs require a token and route through the same client and dry-run safety contract; reads need no auth",
+        "Zero runtime deps: stdlib http.server only; a browser on another LAN machine can load the dashboard"
+      ],
+      "deps": [
+        "t2",
+        "t5"
+      ],
+      "covers": [
+        "c15",
+        "h7"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t13",
+      "summary": "end-to-end acceptance: scripted walkthrough against the real fleet",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "A scripted walkthrough runs devices, read, collect, query, a rule dry-run and arm, an MCP tool call, and a LAN dashboard load against the real fleet, and every step passes - none of it mocked",
+        "README quickstart walks all pillars in order and every verb it names exists; learn/explain/overview are accurate for every shipped verb",
+        "Each named audience surface is exercised: agent CLI with --json, MCP client, Python import, LAN browser"
+      ],
+      "deps": [
+        "t3",
+        "t4",
+        "t6",
+        "t7",
+        "t8",
+        "t9",
+        "t10",
+        "t11",
+        "t12"
+      ],
+      "covers": [
+        "c1",
+        "h11",
+        "c4",
+        "h12",
+        "c20",
+        "h19",
+        "c2",
+        "h13"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t14",
+      "summary": "room naming registry: operator-chosen names for the main unit and each Room Sensor",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "sensibo room list shows every sensing location (main unit and each Room Sensor with stable id, model, last-seen); sensibo room name assigns a persistent local alias, dry-run by default",
+        "read, query, rules, and the web dashboard accept and display room names; a test renames a location and queries its old data by the new name without loss",
+        "Stale sensors are visible: room list flags a location whose last reading is older than a threshold",
+        "Explain catalog entries present; teken cli doctor . --strict stays green"
+      ],
+      "deps": [
+        "t2"
+      ],
+      "covers": [
+        "c21",
+        "h20"
+      ],
+      "instruction": ""
+    }
+  ],
+  "risks": [
+    {
+      "id": "r1",
+      "text": "historicalMeasurements empirical window unknown until probed with the real key - probe read-only before t6 lands",
+      "kind": "unknown_nonblocking",
+      "task_id": "t6"
+    },
+    {
+      "id": "r2",
+      "text": "Real rate-limit ceiling unpublished - find empirically and gently in t1",
+      "kind": "unknown_nonblocking",
+      "task_id": "t1"
+    },
+    {
+      "id": "r3",
+      "text": "catalog.py and cli/__init__.py are shared append points for every verb task - same-wave textual conflicts are mechanical (append-only) but must be merged by the operator",
+      "kind": "unknown_nonblocking",
+      "task_id": null
+    },
+    {
+      "id": "r4",
+      "text": "timer/ and schedules/ may live under v1 not v2 - verify during t8",
+      "kind": "unknown_nonblocking",
+      "task_id": "t8"
+    },
+    {
+      "id": "r5",
+      "text": "Real-fleet acceptance (t5, t13) needs the operator key present at ~/.sensibo/.env - operator has staged it",
+      "kind": "unknown_nonblocking",
+      "task_id": "t13"
+    }
+  ]
+}

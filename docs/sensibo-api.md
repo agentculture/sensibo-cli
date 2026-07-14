@@ -137,15 +137,18 @@ than ~60s (Home Assistant's battle-tested floor); back off on 429.
 
 - `historicalMeasurements` takes `days`, default 1. **Sensibo documents no
   maximum and no retention policy (CONFIRMED absence).**
-- **The window appears to be ~7 days (LIKELY, not confirmed).** The CRAN R client
-  `sensibo.sky` documents the parameter as "max 7 days". That is a third-party
-  implementation, not a Sensibo statement.
+- **Probed against the operator's real fleet on 2026-07-14 (CONFIRMED for this
+  account): `days=1` returns HTTP 200 with a ~90-second-granularity series;
+  every value ≥ 2 (2, 3, 4, 5, 6, 7, 30, 90, 365, 730) returns HTTP 403.** The
+  accessible window on this (non-Plus) account is exactly one day. The CRAN
+  `sensibo.sky` "max 7 days" claim did **not** hold here; a paid tier may raise
+  the limit (UNVERIFIED).
+- **Consequence for the collector:** backfill can recover at most the last day.
+  Two-year history is carried entirely by forward retention, and **a collection
+  gap longer than ~1 day is permanently lost data** — the collector needs an
+  always-on home.
 - Don't conflate this with Sensibo Plus's advertised "30 days of event logs" —
   that is the *events* endpoint, not measurements.
-
-> **Action:** this is trivially falsifiable the moment we have an API key —
-> request `days=30` and see what comes back. **Do that before putting a number in
-> the README.**
 
 ## Per-model sensor sets
 
@@ -160,7 +163,7 @@ Keyed by the `productModel` field:
 | *all pods* | `temperature`, `humidity`, `feelsLike`, `acState`, `connectionStatus`, `firmwareVersion` | baseline |
 | **Sky / Sky Plus** | the baseline. No air quality. | Sky Plus can promote a Room Sensor to main sensor |
 | **Air** | temperature, humidity only | no AQ sensors |
-| **Air Pro** (`airq`) | + `tvoc` (ppb), `co2` (ppm) | **No PM2.5.** |
+| **Air Pro** (`airq`) | + `tvoc` (ppb), `co2` (ppm), `iaq`, `motion`, `roomIsOccupied`, `rssi` | **No PM2.5.** Field set CONFIRMED against the operator's real pod 2026-07-14. |
 | **Elements** (`elements`) | + `pm25` (µg/m³), `tvoc`, `co2`, `etoh`, `iaq` | real particulate sensor |
 | **Pure** (`pure`) | `pm25` — **as an AQI enum, not µg/m³** | no timer, no smartmode |
 | **Room Sensor** | `motion`, temperature, humidity, battery, rssi | **not a pod** — see below |
