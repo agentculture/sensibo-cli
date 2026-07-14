@@ -1,0 +1,26 @@
+{
+  "name": "cool-bedroom-when-hallway-busy",
+  "pod": "pod-bedroom",
+  "action": {
+    "on": true,
+    "mode": "cool",
+    "targetTemperature": 22
+  },
+  "conditions": {
+    "all": [
+      {
+        "type": "occupancy",
+        "location": "Hallway",
+        "occupied": true
+      },
+      {
+        "type": "threshold",
+        "location": "Bedroom",
+        "field": "temperature",
+        "op": ">",
+        "value": 26
+      }
+    ]
+  },
+  "execution": "local (stops when this daemon stops)"
+}

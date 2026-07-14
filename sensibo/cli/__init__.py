@@ -72,6 +72,7 @@ def _build_parser() -> argparse.ArgumentParser:
     from sensibo.cli._commands import query as _query_group
     from sensibo.cli._commands import read as _read_cmd
     from sensibo.cli._commands import room as _room_group
+    from sensibo.cli._commands import rule as _rule_group
     from sensibo.cli._commands import schedule as _schedule_group
     from sensibo.cli._commands import set as _set_cmd
     from sensibo.cli._commands import smartmode as _smartmode_group
@@ -110,6 +111,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _query_group.register(sub)
     _read_cmd.register(sub)
     _room_group.register(sub)
+    _rule_group.register(sub)
     _schedule_group.register(sub)
     _set_cmd.register(sub)
     _smartmode_group.register(sub)

@@ -122,10 +122,24 @@ AC state, the target state, and the diff — and changes nothing.
   schema-flexible: sensor sets differ per model, so persist "whatever fields
   this pod reported", and branch on `productModel` (the `pm25` unit trap in
   [`sensibo-api.md`](sensibo-api.md) is the reason).
-- **`sensibo/rules/`** — the local rules engine, last. Not yet written. Needs
-  hysteresis and a minimum off-time so a rule cannot short-cycle a compressor,
-  and a "what would this do right now?" inspection mode before a rule is
-  armed.
+- **`sensibo/rules/`** — the local rules engine. **Implemented.** A rule is
+  declarative JSON (a name, a target pod, an `acState` action, and a tree of
+  conditions over current store readings — thresholds, time-of-day windows,
+  occupancy, and cross-room combinations addressing locations by name through
+  `sensibo.store.resolve_location`). It imports the store and the API client and
+  is imported by the CLI, but never imports `sensibo.cli` (same layering rule as
+  the store). Three safety properties are load-bearing and tested: a per-pod
+  minimum off-time / hysteresis (≥ 10 min, persisted across restarts) so a
+  flapping condition cannot short-cycle a compressor; at most one write per pod
+  per evaluation pass, through the API client's own rate limiting; and a rule
+  cannot be *armed* until a `rule dry-run` of its current definition has run —
+  editing the rule invalidates that fingerprint. Every rule and every
+  rule-verb output declares `execution: local (stops when this daemon stops)`,
+  the deliberate contrast with the cloud verbs (`smartmode`/`schedule`/`timer`).
+  `sensibo rule run` is the only verb that drives the AC, and only for armed
+  rules. A shipped example (`examples/cross-room-motion-temp.rule.json`) combines
+  motion in one room with temperature in another — something Climate React
+  cannot express.
 
 The key resolves as `SENSIBO_API_KEY` in the environment first, then
 `~/.sensibo/.env` (`sensibo/api/_auth.py`). It is never read from a committed
