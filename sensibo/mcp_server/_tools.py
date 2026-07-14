@@ -338,7 +338,7 @@ def set_ac_state(
     requested = _requested_ac_changes(power=power, mode=mode, target=target, fan=fan, swing=swing)
     if not requested:
         raise ValueError(
-            "no fields given to change: pass at least one of " "power/mode/target/fan/swing"
+            "no fields given to change: pass at least one of power/mode/target/fan/swing"
         )
 
     client = _build_client()

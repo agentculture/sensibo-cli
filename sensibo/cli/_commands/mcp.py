@@ -75,7 +75,7 @@ def _mcp_sections() -> list[dict[str, object]]:
                 "locations), one API call",
                 "read_location — current readings by stable id, alias, or room name",
                 "query_history — local store only; latest/range by location+field",
-                "set_ac_state — apply defaults to false (dry-run diff only; " "apply=true commits)",
+                "set_ac_state — apply defaults to false (dry-run diff only; apply=true commits)",
                 "room_list — every known location with alias and staleness",
             ],
         },
