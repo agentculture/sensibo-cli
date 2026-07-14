@@ -114,6 +114,9 @@ is a bug.
   and how to add a verb.
 - [`docs/api.md`](docs/api.md) — the Python library surface: `import sensibo`
   with zero CLI/argparse involvement, for bigger apps that connect directly.
+- [`docs/mcp.md`](docs/mcp.md) — the MCP server (`sensibo mcp serve`, behind
+  the optional `sensibo-cli[mcp]` extra): client configuration and the tool
+  reference for bigger apps that connect via MCP.
 - [`docs/roadmap.md`](docs/roadmap.md) — build order, and which automations run
   in Sensibo's cloud vs. need a daemon alive.
 - [`docs/history.md`](docs/history.md) — the before-state this build started

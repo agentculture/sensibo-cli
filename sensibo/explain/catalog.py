@@ -414,6 +414,46 @@ this machine is asleep. Every response carries an
     sensibo schedule delete ac1 sched123 --apply --json
 """
 
+_MCP = """\
+# sensibo mcp
+
+An MCP (Model Context Protocol) server over stdio, for bigger apps and MCP
+clients (Claude Code, Claude Desktop, ...) that want the same read/control
+surface as the CLI without shelling out to it. Ships behind the **optional**
+extra `sensibo-cli[mcp]` — the core CLI's zero-runtime-dependency stance
+(`pyproject.toml`'s `dependencies = []`) never changes; only `sensibo mcp
+serve` needs the extra, and it is only imported once that verb actually runs.
+
+Full client-configuration walkthrough and tool reference: `docs/mcp.md`.
+
+## Verbs
+
+- `sensibo mcp serve` — run the MCP server over stdio. Requires the `mcp`
+  extra; without it, fails with a `hint:` naming
+  `pip install "sensibo-cli[mcp]"` rather than a traceback.
+- `sensibo mcp overview` — describe this noun.
+
+## Tools exposed
+
+- `list_devices` — the fleet, one API call (mirrors `sensibo devices`).
+- `read_location` — current readings by stable id, alias, or room name
+  (mirrors `sensibo read`, plus alias resolution via the room registry).
+- `query_history` — local store only, never the network; latest/range by
+  location + field (mirrors `sensibo query`).
+- `set_ac_state` — power/mode/target/fan/swing. `apply` **defaults to
+  `false`**: a dry run returns the diff of what would change and writes
+  nothing, exactly mirroring `sensibo set` without `--apply`. `apply=true`
+  commits.
+- `room_list` — every known location with alias and staleness (mirrors
+  `sensibo room list`).
+
+## Usage
+
+    pip install "sensibo-cli[mcp]"
+    sensibo mcp serve
+    sensibo mcp overview --json
+"""
+
 _TIMER = """\
 # sensibo timer
 
@@ -464,6 +504,9 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("room", "name"): _ROOM_NAME,
     ("devices",): _DEVICES,
     ("read",): _READ,
+    ("mcp",): _MCP,
+    ("mcp", "overview"): _MCP,
+    ("mcp", "serve"): _MCP,
     ("smartmode",): _SMARTMODE,
     ("smartmode", "overview"): _SMARTMODE,
     ("smartmode", "show"): _SMARTMODE,
