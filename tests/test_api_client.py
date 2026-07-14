@@ -190,6 +190,129 @@ def test_429_retry_count_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(fake.calls) == 3
 
 
+def test_429_retry_honors_retry_after_header_in_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SensiboClient(
+        api_key=API_KEY, min_interval=0, max_retries=1, backoff_base=0.01, backoff_jitter=0.0
+    )
+    items = [
+        HTTPError(
+            "https://x/?apiKey=K",
+            429,
+            "Too Many Requests",
+            {"Retry-After": "7"},
+            io.BytesIO(b""),
+        ),
+        _json_response({"ok": True}),
+    ]
+    fake = _SequenceFakeUrlopen(items)
+    monkeypatch.setattr(client_module, "urlopen", fake)
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(client_module.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(client_module.random, "uniform", lambda a, b: 0.0)
+
+    result = client.get_pod("abc")
+
+    assert result == {"ok": True}
+    assert len(sleeps) == 1
+    assert sleeps[0] >= 7
+
+
+def test_429_retry_after_unparseable_falls_back_to_computed_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SensiboClient(
+        api_key=API_KEY, min_interval=0, max_retries=1, backoff_base=1.0, backoff_jitter=0.0
+    )
+    items = [
+        HTTPError(
+            "https://x/?apiKey=K",
+            429,
+            "Too Many Requests",
+            {"Retry-After": "not-a-number-or-a-date"},
+            io.BytesIO(b""),
+        ),
+        _json_response({"ok": True}),
+    ]
+    fake = _SequenceFakeUrlopen(items)
+    monkeypatch.setattr(client_module, "urlopen", fake)
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(client_module.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(client_module.random, "uniform", lambda a, b: 0.0)
+
+    result = client.get_pod("abc")
+
+    assert result == {"ok": True}
+    # falls back to the plain exponential backoff (attempt 0): base * 2**0 == 1.0
+    assert sleeps == [pytest.approx(1.0)]
+
+
+def test_429_retry_after_http_date_form_does_not_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SensiboClient(
+        api_key=API_KEY, min_interval=0, max_retries=1, backoff_base=1.0, backoff_jitter=0.0
+    )
+    items = [
+        HTTPError(
+            "https://x/?apiKey=K",
+            429,
+            "Too Many Requests",
+            # a syntactically valid HTTP-date, but long past -> non-positive delta
+            {"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"},
+            io.BytesIO(b""),
+        ),
+        _json_response({"ok": True}),
+    ]
+    fake = _SequenceFakeUrlopen(items)
+    monkeypatch.setattr(client_module, "urlopen", fake)
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(client_module.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(client_module.random, "uniform", lambda a, b: 0.0)
+
+    result = client.get_pod("abc")
+
+    assert result == {"ok": True}
+    # past date parses to a non-positive delta, so the computed backoff (1.0) wins
+    assert sleeps == [pytest.approx(1.0)]
+
+
+def test_429_retry_after_is_capped_and_retries_stay_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SensiboClient(
+        api_key=API_KEY, min_interval=0, max_retries=2, backoff_base=0.01, backoff_jitter=0.0
+    )
+    always_429 = [
+        HTTPError(
+            "https://x/?apiKey=K",
+            429,
+            "Too Many Requests",
+            {"Retry-After": "999999"},  # hostile: would hang the client if honored raw
+            io.BytesIO(b"slow"),
+        )
+        for _ in range(10)
+    ]
+    fake = _SequenceFakeUrlopen(always_429)
+    monkeypatch.setattr(client_module, "urlopen", fake)
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(client_module.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(client_module.random, "uniform", lambda a, b: 0.0)
+
+    with pytest.raises(RateLimitExceededError):
+        client.get_pod("abc")
+
+    # initial attempt + max_retries retries, never unbounded
+    assert len(fake.calls) == 3
+    assert sleeps
+    assert all(s <= 120 for s in sleeps)
+
+
 # --- client-side rate limiting ----------------------------------------------
 
 

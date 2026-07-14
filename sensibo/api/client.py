@@ -36,6 +36,8 @@ import random
 import re
 import time
 from collections.abc import Mapping
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -59,6 +61,11 @@ DEFAULT_BACKOFF_JITTER = 0.5
 DEFAULT_TIMEOUT = 15.0
 
 _ALL_FIELDS = "*"
+
+# Ceiling on any single 429 sleep (computed backoff or a server-sent
+# Retry-After, whichever is larger) — a hostile or misconfigured header must
+# never be able to hang the client indefinitely.
+_MAX_RETRY_DELAY = 120.0
 
 
 def _desensitize_http_error(err: HTTPError) -> None:
@@ -85,11 +92,37 @@ def _read_error_body(err: HTTPError) -> str:
         # decoding or the diagnostic is gzip bytes (caught on a real 404).
         if err.headers.get("Content-Encoding") == "gzip":
             raw = gzip.GzipFile(fileobj=io.BytesIO(raw)).read()
-    except Exception:  # noqa: BLE001 - best-effort diagnostic only, never fatal
+    except Exception:  # noqa: BLE001
+        # Best-effort diagnostic only, never fatal: a body-read failure here
+        # must not mask the real HTTP error we're building a message for.
         return ""
     if not raw:
         return ""
     return raw.decode("utf-8", errors="replace")[:200]
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse a ``Retry-After`` header value into seconds, or ``None``.
+
+    RFC 9110 allows either an integer seconds count or an HTTP-date; both
+    forms are handled here. Anything else — absent, empty, or a value that
+    doesn't parse as either form — returns ``None`` so the caller falls back
+    to the computed exponential backoff instead of raising.
+    """
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
 
 
 class SensiboClient:
@@ -150,6 +183,43 @@ class SensiboClient:
             base = re.sub(r"/v\d+$", f"/{api_version}", base)
         return f"{base}{path}?{urlencode(query)}"
 
+    def _retry_delay(self, err: HTTPError, attempt: int) -> float:
+        """Seconds to sleep before retrying a 429.
+
+        The larger of the computed exponential-backoff-plus-jitter delay and
+        any ``Retry-After`` the server sent, capped at ``_MAX_RETRY_DELAY`` so
+        a hostile or malformed header can't hang the client.
+        """
+        # jitter for retry timing only: not a security use of random.
+        backoff = self._backoff_base * (2**attempt) + random.uniform(  # nosec B311
+            0, self._backoff_jitter
+        )
+        retry_after = _parse_retry_after(err.headers.get("Retry-After"))
+        delay = backoff if retry_after is None else max(backoff, retry_after)
+        return min(delay, _MAX_RETRY_DELAY)
+
+    def _as_api_error(self, err: HTTPError, url: str) -> ApiError:
+        """Translate a terminal (non-retried) HTTPError into a scrubbed, typed ApiError."""
+        body_snippet = _read_error_body(err)
+        _desensitize_http_error(err)
+        safe_url = scrub_url(url)
+        if err.code == 429:
+            return RateLimitExceededError(
+                message=(
+                    f"rate limited (HTTP 429) after {self._max_retries} retries "
+                    f"calling {safe_url}: {body_snippet}"
+                ),
+                remediation=(
+                    "the client already backs off automatically; poll less often, "
+                    "or raise min_interval/max_retries"
+                ),
+            )
+        return HttpError(
+            message=f"HTTP {err.code} calling {safe_url}: {body_snippet}",
+            status=err.code,
+            remediation="check the request parameters and the Sensibo API status",
+        )
+
     def request(
         self,
         method: str,
@@ -160,8 +230,10 @@ class SensiboClient:
     ) -> object:
         """Issue one HTTP request and return the parsed JSON body (or ``None``).
 
-        Retries on HTTP 429 with exponential backoff plus jitter, bounded by
-        ``max_retries``. Every other non-2xx response raises
+        Retries on HTTP 429 with exponential backoff plus jitter, honoring a
+        ``Retry-After`` response header when present (sleeping at least that
+        long, capped at ``_MAX_RETRY_DELAY``), bounded by ``max_retries``.
+        Every other non-2xx response raises
         :class:`~sensibo.api._errors.HttpError` carrying the HTTP status. A
         client-side minimum interval is enforced once per call, before the
         first attempt.
@@ -184,33 +256,10 @@ class SensiboClient:
             except HTTPError as err:
                 self._last_request_at = time.monotonic()
                 if err.code == 429 and attempt < self._max_retries:
-                    # jitter for retry timing only: not a security use of random.
-                    delay = self._backoff_base * (2**attempt) + random.uniform(  # nosec B311
-                        0, self._backoff_jitter
-                    )
-                    time.sleep(delay)
+                    time.sleep(self._retry_delay(err, attempt))
                     attempt += 1
                     continue
-
-                body_snippet = _read_error_body(err)
-                _desensitize_http_error(err)
-                safe_url = scrub_url(url)
-                if err.code == 429:
-                    raise RateLimitExceededError(
-                        message=(
-                            f"rate limited (HTTP 429) after {self._max_retries} retries "
-                            f"calling {safe_url}: {body_snippet}"
-                        ),
-                        remediation=(
-                            "the client already backs off automatically; poll less often, "
-                            "or raise min_interval/max_retries"
-                        ),
-                    ) from None
-                raise HttpError(
-                    message=f"HTTP {err.code} calling {safe_url}: {body_snippet}",
-                    status=err.code,
-                    remediation="check the request parameters and the Sensibo API status",
-                ) from None
+                raise self._as_api_error(err, url) from None
             except URLError as err:
                 self._last_request_at = time.monotonic()
                 raise ApiError(
