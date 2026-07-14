@@ -117,6 +117,9 @@ is a bug.
 - [`docs/mcp.md`](docs/mcp.md) — the MCP server (`sensibo mcp serve`, behind
   the optional `sensibo-cli[mcp]` extra): client configuration and the tool
   reference for bigger apps that connect via MCP.
+- [`docs/web.md`](docs/web.md) — the LAN dashboard: quickstart, the
+  reads-open/writes-token-gated model, the token file, and the offline
+  property.
 - [`docs/roadmap.md`](docs/roadmap.md) — build order, and which automations run
   in Sensibo's cloud vs. need a daemon alive.
 - [`docs/history.md`](docs/history.md) — the before-state this build started
