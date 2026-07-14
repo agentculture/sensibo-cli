@@ -136,6 +136,37 @@ itself (distinct from the global `overview`, which describes the agent).
     sensibo cli overview --json
 """
 
+_SET = """\
+# sensibo set
+
+**Drives an air conditioner in someone's home.** Dry-run by default: without
+`--apply`, reads the pod's current `acState` and prints exactly what *would*
+change — zero write requests. With `--apply`, a single changed field goes
+through the safe single-property `PATCH`; two or more changed fields go
+through the full-state `POST`. Either way the resulting state is read back and
+reported, never assumed.
+
+`--all` applies the same requested change to every pod in the fleet via one
+fleet listing call; per-pod writes still only happen with `--apply`.
+
+## Usage
+
+    sensibo set <pod-id> --mode cool --target 22
+    sensibo set <pod-id> --power on --apply
+    sensibo set --all --power off --apply
+    sensibo set <pod-id> --mode cool --json
+
+## Flags
+
+- `--power on|off`
+- `--mode cool|heat|fan|dry|auto`
+- `--target <temp>`
+- `--fan <level>` (device-specific)
+- `--swing <mode>` (device-specific)
+- `--all` — target every pod in the fleet
+- `--apply` — commit the change (default is dry-run)
+"""
+
 
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
@@ -148,4 +179,5 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("doctor",): _DOCTOR,
     ("cli",): _CLI,
     ("cli", "overview"): _CLI,
+    ("set",): _SET,
 }
