@@ -643,3 +643,77 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("timer", "clear"): _TIMER,
     ("web",): _WEB,
 }
+
+# --- single source of truth for `sensibo learn`'s "Commands" map -----------
+#
+# `learn` used to carry its own hand-maintained command list — one for its
+# text output, one for its --json payload — that silently drifted from the
+# catalog above as verbs landed (Qodo review 3581287831). COMMAND_ORDER and
+# SUMMARIES fix that: landing a new top-level verb means adding ONE entry
+# here (plus its ENTRIES markdown above), and both of `learn`'s outputs pick
+# it up automatically. `sensibo/cli/_commands/learn.py` iterates
+# COMMAND_ORDER; it does not maintain a parallel list of its own.
+#
+# Order is display order in `learn`'s "Commands" section: agent-first
+# introspection verbs first, then the product verbs in the order they were
+# registered in `sensibo/cli/__init__.py`'s `_build_parser`. Each entry is the
+# *displayed* path — a noun group with one meaningful entry point (`cli`,
+# `mcp`) is listed by that entry point rather than the bare noun.
+COMMAND_ORDER: tuple[tuple[str, ...], ...] = (
+    ("whoami",),
+    ("learn",),
+    ("explain",),
+    ("overview",),
+    ("doctor",),
+    ("cli", "overview"),
+    ("devices",),
+    ("read",),
+    ("set",),
+    ("collect",),
+    ("query",),
+    ("room",),
+    ("rule",),
+    ("smartmode",),
+    ("schedule",),
+    ("timer",),
+    ("mcp", "serve"),
+    ("web",),
+)
+
+# One-line summaries for `sensibo learn`'s command map, keyed by the same path
+# tuples as COMMAND_ORDER.
+SUMMARIES: dict[tuple[str, ...], str] = {
+    ("whoami",): "Identity probe from culture.yaml.",
+    ("learn",): "Self-teaching prompt.",
+    ("explain",): "Markdown docs for any noun/verb path.",
+    ("overview",): "Descriptive snapshot of the agent.",
+    ("doctor",): "Check the agent-identity invariants.",
+    ("cli", "overview"): "Describe the CLI surface.",
+    ("devices",): "List the fleet from one API call.",
+    ("read",): "One snapshot of every current reading for a location.",
+    ("set",): "Control the AC: dry-run by default, --apply commits.",
+    ("collect",): "Poll the fleet on a cadence into the local store.",
+    ("query",): "Offline reads from the local store.",
+    ("room",): "Name sensing locations; flag stale sensors.",
+    ("rule",): "Local rules engine: dry-run before arm, hysteresis.",
+    ("smartmode",): "Climate React — runs in Sensibo's cloud.",
+    ("schedule",): "Cloud schedules.",
+    ("timer",): "Cloud timers.",
+    ("mcp", "serve"): "MCP server (needs the sensibo-cli[mcp] extra).",
+    ("web",): "LAN dashboard: open reads, token-gated writes.",
+}
+
+# Guard: every ordered entry must have both a summary and a resolvable
+# `explain` doc, so `learn`'s command map can never point at a dead end.
+_unsummarized = [path for path in COMMAND_ORDER if path not in SUMMARIES]
+if _unsummarized:
+    raise RuntimeError(
+        f"sensibo.explain.catalog: COMMAND_ORDER entries missing from SUMMARIES: {_unsummarized}"
+    )
+_unresolvable = [path for path in COMMAND_ORDER if path not in ENTRIES]
+if _unresolvable:
+    raise RuntimeError(
+        "sensibo.explain.catalog: COMMAND_ORDER entries missing an ENTRIES markdown "
+        f"doc: {_unresolvable}"
+    )
+del _unsummarized, _unresolvable
