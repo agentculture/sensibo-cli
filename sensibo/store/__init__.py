@@ -29,12 +29,24 @@ Public API
 * :data:`DEFAULT_RETENTION_DAYS` — the retention-window default.
 * :func:`default_db_path` — where the db lives absent an explicit override.
 * :func:`derive_unit` — the unit-tagging rule readings are stored under.
+* :func:`resolve_location`, :data:`DEFAULT_STALE_AFTER_HOURS`,
+  :func:`is_stale` — the room naming registry (:mod:`sensibo.store.rooms`):
+  resolve a location by stable id, operator alias, or Sensibo room name, and
+  flag one as stale.
 """
 
 from __future__ import annotations
 
 from ._paths import default_db_path, resolve_db_path
 from ._units import derive_unit
+from .rooms import (
+    DEFAULT_STALE_AFTER_HOURS,
+    AmbiguousLocationError,
+    LocationNotFoundError,
+    LocationResolutionError,
+    is_stale,
+    resolve_location,
+)
 from .store import (
     DEFAULT_RETENTION_DAYS,
     KIND_POD,
@@ -46,12 +58,18 @@ from .store import (
 
 __all__ = [
     "DEFAULT_RETENTION_DAYS",
+    "DEFAULT_STALE_AFTER_HOURS",
     "KIND_POD",
     "KIND_ROOM_SENSOR",
+    "AmbiguousLocationError",
+    "LocationNotFoundError",
+    "LocationResolutionError",
     "LocationRecord",
     "ReadingRecord",
     "Store",
     "default_db_path",
     "derive_unit",
+    "is_stale",
     "resolve_db_path",
+    "resolve_location",
 ]
