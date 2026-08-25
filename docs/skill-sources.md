@@ -42,7 +42,7 @@ above:
 
 | Skill | Upstream | Origin | Notes | Added |
 |-------|----------|--------|-------|-------|
-| `manage-ac` | — (local) | sensibo-cli | Operating quick-reference for the fleet via the installed `sensibo` CLI: reads (`devices` / `read` / `query` / `room list`), writes (`set`, dry-run + `--apply`), naming (`room name`), automation (local `rule`; cloud `schedule` / `timer` / `smartmode`). SKILL.md only, no scripts — the CLI is the interface and `sensibo learn` / `sensibo explain <noun> [verb]` stay the authoritative docs. Carries `type: command` per the skill_loader contract. | 2026-08-23 |
+| `manage-ac` | — (local) | sensibo-cli | Operating quick-reference for the fleet via the installed `sensibo` CLI: reads (`devices` / `read` / `query` / `room list`), writes (`set`, dry-run + `--apply`), naming (`room name`), automation (local `rule`; cloud `schedule` / `timer` / `smartmode`). SKILL.md plus `scripts/ac.sh`, a one-shot control wrapper (`status` / `read` / `on` / `off` / `set` / `mode` / `fan`, `[pod\|all]`, `--json`, `--dry-run`; control verbs commit via `sensibo set --apply` by design, `status` costs one fleet API call). The CLI stays the interface and `sensibo learn` / `sensibo explain <noun> [verb]` the authoritative docs. Carries `type: command` per the skill_loader contract. | 2026-08-23 |
 
 ## Qwen Code bridge
 

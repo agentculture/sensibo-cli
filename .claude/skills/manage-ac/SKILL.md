@@ -22,7 +22,7 @@ For explicit control actions, prefer the wrapper — one command resolves the
 target pod (single-pod fleets need no id) and commits in one shot:
 
 ```bash
-bash .claude/skills/manage-ac/scripts/ac.sh status              # fleet + live snapshot
+bash .claude/skills/manage-ac/scripts/ac.sh status              # fleet (live) + latest stored readings
 bash .claude/skills/manage-ac/scripts/ac.sh on                  # power on the (single) pod
 bash .claude/skills/manage-ac/scripts/ac.sh off
 bash .claude/skills/manage-ac/scripts/ac.sh set 22              # target 22°
@@ -30,11 +30,17 @@ bash .claude/skills/manage-ac/scripts/ac.sh mode cool
 bash .claude/skills/manage-ac/scripts/ac.sh fan auto
 bash .claude/skills/manage-ac/scripts/ac.sh read                # live snapshot
 bash .claude/skills/manage-ac/scripts/ac.sh on --dry-run        # preview only
+bash .claude/skills/manage-ac/scripts/ac.sh status --json       # single JSON document
+bash .claude/skills/manage-ac/scripts/ac.sh set 22 --json      # structured result on stdout
 ```
 
 The pod argument is optional (resolved from `sensibo devices --json` when the
 fleet has exactly one pod) or `all` for the whole fleet; `on <pod-id>` and
-`on all` both work.
+`on all` both work. `--json` is accepted by every verb: results go to stdout,
+diagnostics (including the "Running:" line) to stderr, and `status --json`
+emits one merged JSON document. `status` makes exactly one fleet API call —
+readings come from the offline store, so an empty store prints a hint instead
+of polling; `read` stays the live single-location snapshot.
 
 ## Safety contract
 
@@ -123,12 +129,17 @@ machine being off.
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/ac.sh` | One-shot control wrapper: `status`, `read`, `on`, `off`, `set <temp>`, `mode <m>`, `fan <level>` (all taking `[pod\|all]` and `--dry-run`). Resolves the single-pod target automatically; control verbs commit via `sensibo set ... --apply`. |
+| `scripts/ac.sh` | One-shot control wrapper: `status`, `read`, `on`, `off`, `set <temp>`, `mode <m>`, `fan <level>` (all taking `[pod\|all]` and `--json`; control verbs also take `--dry-run`). Resolves the single-pod target automatically; control verbs commit via `sensibo set ... --apply`. `status` costs one fleet API call (readings come from the offline store). |
 
 ## Red flags
 
 - **Never** commit a write (`--apply`) without the user asking for that change;
   when in doubt, show the dry-run and ask.
+- **Never** toggle power in a loop or on a timer with the one-shot verbs —
+  `ac.sh on/off` is for deliberate single actions. Automated compressor
+  start/stop must go through `sensibo rule`, which enforces the minimum
+  off-time (10-minute floor) that the direct `set` path intentionally does
+  not, so a rule cannot short-cycle a unit.
 - **Never** bypass the arm contract (fresh dry-run before `rule arm`) or lower
   the minimum off-time floor.
 - **Never** poll faster than ~60 s, and never loop one call per device — one
