@@ -21,6 +21,9 @@ ignores:
   - ".teken/**"
   # Vendored skills are cited verbatim from guildmaster — do not reformat them.
   - ".claude/skills/**"
+  # Qwen Code bridge: .qwen/skills is a symlink to .claude/skills, so the
+  # same vendored content reappears under a second path — exclude the mirror.
+  - ".qwen/skills/**"
   # The mcp extra's dependency tree (httpx/httpcore/idna/starlette/uvicorn,
   # etc.) ships LICENSE.md under dist-info/licenses/ once `uv sync` installs
   # the dev group — never repo source, never worth linting.

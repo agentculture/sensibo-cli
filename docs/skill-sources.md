@@ -35,6 +35,24 @@ is load-bearing, even where guildmaster's upstream copy omits it.
 | `assign-to-workforce` | `../guildmaster/.claude/skills/assign-to-workforce/` | **devague** (re-broadcast via guildmaster) | plan→parallel-implementation leg of the devague workflow chain. Verbatim (already carried `type: command`). | 2026-05-26 (guildmaster 0.6.0) |
 | `ask-colleague` | `../colleague/.claude/skills/ask-colleague/` | **colleague** (renamed from convertible; vendored directly — guildmaster re-broadcast pending) | The first-party front door to the `colleague` CLI: hand a scoped task to a *different* engine/mind via `explore` / `review` / `write`, grade a finished work item via `feedback` (the ROI loop), and reap stale/corrupt `colleague/*` branches a crashed run left behind via `clean`. Every verb takes `--json` (result JSON on stdout, diagnostics on stderr). `explore`/`review` run isolated in a throwaway `git worktree`; `write` **previews by default** (throwaway worktree, no side effects) and refuses a dirty tree only when applying (`--apply` / `--pr`). Verbatim except one consumer-identifying clause in the Provenance paragraph (`colleague vendors from guildmaster` → `sensibo-cli vendors from guildmaster`); already carried `type: command`. Optional runtime dep: **`colleague`** on PATH. | 2026-06-12 (colleague 1.7.0, direct) |
 
+## Local skills
+
+Skills authored in this repo — no upstream, outside the re-sync procedure
+above:
+
+| Skill | Upstream | Origin | Notes | Added |
+|-------|----------|--------|-------|-------|
+| `manage-ac` | — (local) | sensibo-cli | Operating quick-reference for the fleet via the installed `sensibo` CLI: reads (`devices` / `read` / `query` / `room list`), writes (`set`, dry-run + `--apply`), naming (`room name`), automation (local `rule`; cloud `schedule` / `timer` / `smartmode`). SKILL.md plus `scripts/ac.sh`, a one-shot control wrapper (`status` / `read` / `on` / `off` / `set` / `mode` / `fan`, `[pod\|all]`, `--json`, `--dry-run`; control verbs commit via `sensibo set --apply` by design, `status` costs one fleet API call). The CLI stays the interface and `sensibo learn` / `sensibo explain <noun> [verb]` the authoritative docs. Carries `type: command` per the skill_loader contract. | 2026-08-23 |
+
+## Qwen Code bridge
+
+`.qwen/skills` is a relative symlink to `.claude/skills`, so the same skill
+tree is also discoverable as Qwen Code project skills — no second copy, no
+drift. Qwen Code's loader follows symlinks (top-level directory or per-skill
+entries) and its frontmatter validation requires only `name` + `description`,
+so the vendored `type: command` field (load-bearing for Claude and the
+culture `core.skill_loader`) is accepted unmodified.
+
 ## Re-sync procedure
 
 ```bash
