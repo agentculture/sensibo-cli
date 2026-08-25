@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-08-25
+
+### Added
+
+- manage-ac skill: fleet quick-reference plus scripts/ac.sh one-shot wrapper (status/read/on/off/set/mode/fan, single-pod auto-resolution, --dry-run preview)
+- .qwen/skills relative symlink to .claude/skills so Qwen Code discovers the same skill tree as project skills
+- docs/skill-sources.md: provenance rows for the local skill and the Qwen Code bridge
+
 ## [0.7.1] - 2026-07-15
 
 Review-triage follow-up on the always-on host (PR #5): three reliability bugs
