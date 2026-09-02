@@ -168,7 +168,7 @@ def test_apply_never_touches_urlopen_or_subprocess(
         calls.append(request)
         return _FakeResponse()
 
-    monkeypatch.setattr("sensibo.notify.transport.urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr("sensibo.notify.transport._open", _fake_urlopen)
 
     rc = main(["notify", "test", "--apply"])
     assert rc == 0

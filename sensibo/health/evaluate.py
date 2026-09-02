@@ -170,6 +170,7 @@ def _mark_all_unknown(
             last_notified_at=prior.last_notified_at if prior is not None else None,
             notifications_today=prior.notifications_today if prior is not None else 0,
             day_key=prior.day_key if prior is not None else None,
+            announced_down_since=prior.announced_down_since if prior is not None else None,
         )
 
 
@@ -264,7 +265,9 @@ def _settle(
             status = STATUS_OK
         elif streak >= config.recovery_hold_cycles:
             status = STATUS_OK
-            if prior.status == STATUS_DOWN and _was_announced(prior):
+            if prior.announced_down_since is not None:
+                # Closes an announced outage — even one that passed through
+                # ``unknown`` while the collector itself was failing.
                 candidate = NOTIFY_RECOVERED
         else:
             # Reporting again, but the hold is not satisfied: hold the line.
@@ -291,19 +294,9 @@ def _settle(
         last_notified_at=prior.last_notified_at if prior is not None else None,
         notifications_today=prior.notifications_today if prior is not None else 0,
         day_key=prior.day_key if prior is not None else None,
+        announced_down_since=prior.announced_down_since if prior is not None else None,
     )
     return state, transition, candidate
-
-
-def _was_announced(prior: HealthState) -> bool:
-    """Did the outage currently open on this location produce a notification?
-
-    Derived, not stored: a notification sent during this episode is stamped at
-    or after the instant the episode began. An outage nobody was told about
-    needs no closing message — which is precisely what stops a flapping sensor
-    from emitting recoveries for downs that were suppressed.
-    """
-    return prior.last_notified_at is not None and prior.last_notified_at >= prior.since
 
 
 # --- debounce: cooldown and the daily cap ----------------------------------
@@ -328,7 +321,11 @@ def _announce(
         and state.last_notified_at is not None
         and (now - state.last_notified_at) < config.cooldown_seconds
     )
-    if within_cooldown or sent_today >= config.daily_cap:
+    # The daily cap bounds *down* alerts; a recovery closes an outage that was
+    # already announced, so it is bounded by those downs and never capped —
+    # otherwise an announced outage could end with no closing message at all.
+    capped = candidate == NOTIFY_DOWN and sent_today >= config.daily_cap
+    if within_cooldown or capped:
         return state, None, True
 
     note = Notification(
@@ -337,7 +334,13 @@ def _announce(
         message=_message(candidate, observation, now, config),
         at=now,
     )
-    state = _replace(state, last_notified_at=now, notifications_today=sent_today + 1)
+    announced = now if candidate == NOTIFY_DOWN else None
+    state = _replace(
+        state,
+        last_notified_at=now,
+        notifications_today=sent_today + 1,
+        announced_down_since=announced,
+    )
     return state, note, False
 
 

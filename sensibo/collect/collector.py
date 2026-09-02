@@ -347,6 +347,7 @@ class Collector:
                 last_notified_at=extra.get("last_notified_at"),
                 notifications_today=int(extra.get("notifications_today", 0) or 0),
                 day_key=extra.get("day_key"),
+                announced_down_since=extra.get("announced_down_since"),
             )
         return states
 
@@ -398,6 +399,7 @@ class Collector:
                 "last_notified_at": state.last_notified_at,
                 "notifications_today": state.notifications_today,
                 "day_key": state.day_key,
+                "announced_down_since": state.announced_down_since,
             }
         self._store.set_meta(META_HEALTH_EXTRA, json.dumps(extras, sort_keys=True))
 

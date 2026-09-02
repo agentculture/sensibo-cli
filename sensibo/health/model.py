@@ -221,6 +221,10 @@ class HealthState:
     last_notified_at: float | None = None
     notifications_today: int = 0
     day_key: str | None = None
+    #: When the currently open outage was announced (a ``down`` notification
+    #: went out); ``None`` when nothing is owed a closing message. Survives an
+    #: ``unknown`` interlude, which is what lets the recovery still fire.
+    announced_down_since: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -233,6 +237,7 @@ class HealthState:
             "last_notified_at": self.last_notified_at,
             "notifications_today": self.notifications_today,
             "day_key": self.day_key,
+            "announced_down_since": self.announced_down_since,
         }
 
 

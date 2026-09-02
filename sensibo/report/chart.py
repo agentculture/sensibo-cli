@@ -87,7 +87,7 @@ def _panel_svg(
         f'fill="currentColor">{_html.escape(stats)}</text>'
     )
 
-    span = (hi - lo) or 1.0  # a flat series still renders a flat mid-height line
+    span = (hi - lo) or 1.0  # a flat series renders as a flat line along the panel baseline
     n = len(values)
     inner_w = DOCUMENT_WIDTH - 2 * _PANEL_PAD
     inner_h = _PANEL_HEIGHT - 50  # leave room for the caption and stats lines

@@ -78,6 +78,21 @@ def redact(text: str, config: NotifyConfig) -> str:
     return text
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse every 3xx: a redirect would re-POST the payload to another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirectHandler)
+
+
+def _open(request: urllib.request.Request, timeout: float):
+    """The one seam through which the webhook POST leaves the process."""
+    return _OPENER.open(request, timeout=timeout)
+
+
 def _send_webhook(payload: Payload, config: NotifyConfig) -> Outcome:
     url = config.webhook_url or ""
     request = urllib.request.Request(
@@ -89,7 +104,7 @@ def _send_webhook(payload: Payload, config: NotifyConfig) -> Outcome:
     try:
         # The URL is operator-configured (an https:// webhook), so scheme auditing
         # is a non-issue here; same pattern as sensibo/api/client.py.
-        with urllib.request.urlopen(request, timeout=config.timeout):  # nosec B310
+        with _open(request, timeout=config.timeout):  # nosec B310
             pass
     except urllib.error.HTTPError as err:
         return Outcome(TRANSPORT_WEBHOOK, False, redact(f"HTTP {err.code}", config))
@@ -120,9 +135,11 @@ def _send_script(payload: Payload, config: NotifyConfig) -> Outcome:
             )
         )
     except subprocess.TimeoutExpired:
-        return Outcome(TRANSPORT_SCRIPT, False, f"timed out after {config.timeout}s")
+        return Outcome(
+            TRANSPORT_SCRIPT, False, redact(f"timed out after {config.timeout}s", config)
+        )
     if proc.returncode != 0:
-        return Outcome(TRANSPORT_SCRIPT, False, f"exit code {proc.returncode}")
+        return Outcome(TRANSPORT_SCRIPT, False, redact(f"exit code {proc.returncode}", config))
     return Outcome(TRANSPORT_SCRIPT, True, "delivered")
 
 

@@ -157,7 +157,7 @@ def test_webhook_posts_json_with_content_type_header(monkeypatch: pytest.MonkeyP
     import sensibo.notify.transport as transport_module
 
     fake = _RecordingUrlopen()
-    monkeypatch.setattr(transport_module.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(transport_module, "_open", fake)
     config = resolve_notify_config(env={WEBHOOK_VAR: WEBHOOK_URL}, home="/nonexistent-home")
     payload = _payload()
 
@@ -179,7 +179,7 @@ def test_webhook_http_500_returns_failed_outcome_without_raising(
 
     fake = _RecordingUrlopen()
     fake.set_error(HTTPError(WEBHOOK_URL, 500, "Internal Server Error", {}, io.BytesIO(b"")))
-    monkeypatch.setattr(transport_module.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(transport_module, "_open", fake)
     config = resolve_notify_config(env={WEBHOOK_VAR: WEBHOOK_URL}, home="/nonexistent-home")
 
     outcomes = send(_payload(), config)
@@ -194,7 +194,7 @@ def test_webhook_network_error_returns_failed_outcome_without_raising(
 
     fake = _RecordingUrlopen()
     fake.set_error(URLError("Name or service not known"))
-    monkeypatch.setattr(transport_module.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(transport_module, "_open", fake)
     config = resolve_notify_config(env={WEBHOOK_VAR: WEBHOOK_URL}, home="/nonexistent-home")
 
     outcomes = send(_payload(), config)
@@ -284,7 +284,7 @@ def test_send_delivers_to_both_transports_in_order(monkeypatch: pytest.MonkeyPat
     import sensibo.notify.transport as transport_module
 
     fake = _RecordingUrlopen()
-    monkeypatch.setattr(transport_module.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(transport_module, "_open", fake)
     config = resolve_notify_config(
         env={WEBHOOK_VAR: WEBHOOK_URL, SCRIPT_VAR: "/bin/true"}, home="/nonexistent-home"
     )
@@ -335,7 +335,7 @@ def test_render_dry_run_makes_zero_urlopen_or_subprocess_calls(
     def _explode_proc(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("render_dry_run must not spawn a subprocess")
 
-    monkeypatch.setattr(transport_module.urllib.request, "urlopen", _explode)
+    monkeypatch.setattr(transport_module, "_open", _explode)
     monkeypatch.setattr(transport_module.subprocess, "run", _explode_proc)
     config = resolve_notify_config(
         env={WEBHOOK_VAR: WEBHOOK_URL, SCRIPT_VAR: "/opt/hooks/alert.sh"}, home="/nonexistent-home"
@@ -345,3 +345,15 @@ def test_render_dry_run_makes_zero_urlopen_or_subprocess_calls(
 
     assert isinstance(rendered, str)
     assert WEBHOOK_URL not in rendered
+
+
+def test_webhook_refuses_redirects_instead_of_reposting_elsewhere() -> None:
+    """A 3xx must surface as a failure: following it would re-POST the payload."""
+    import sensibo.notify.transport as transport_module
+
+    handler = transport_module._NoRedirectHandler()
+    assert handler.redirect_request(None, None, 302, "Found", {}, "https://elsewhere/") is None
+    assert any(
+        isinstance(h, transport_module._NoRedirectHandler)
+        for h in transport_module._OPENER.handlers
+    )

@@ -462,3 +462,47 @@ def test_notification_messages_name_the_location_and_the_iso_last_heard_time() -
 def test_iso8601_renders_utc_regardless_of_the_host_timezone() -> None:
     assert iso8601(0.0) == "1970-01-01T00:00:00Z"
     assert iso8601(None) == "never"
+
+
+# --- review fixes: recoveries are never lost --------------------------------
+
+
+def test_recovery_is_sent_even_when_the_daily_cap_is_exhausted() -> None:
+    config = HealthConfig(daily_cap=1, cooldown_seconds=0.0)
+    r1 = evaluate({}, [pod_obs(last=T0 - 100_000)], OK, T0, config)
+    assert kinds(r1) == [NOTIFY_DOWN]
+    states = dict(r1.states)
+    for step in (1, 2):
+        result = evaluate(states, [pod_obs(last=T0 + 90 * step)], OK, T0 + 90 * step, config)
+        states = dict(result.states)
+    assert kinds(result) == [NOTIFY_RECOVERED]
+    assert states[POD].announced_down_since is None
+
+
+def test_recovery_survives_a_collector_outage_between_down_and_up() -> None:
+    config = HealthConfig(cooldown_seconds=0.0)
+    r1 = evaluate({}, [pod_obs(last=T0 - 100_000)], OK, T0, config)
+    assert kinds(r1) == [NOTIFY_DOWN]
+    states = dict(r1.states)
+    # The collector itself fails for two cycles: the location goes unknown.
+    failed = CollectorOutcome(ok=False, error="boom")
+    for step in (1, 2):
+        result = evaluate(states, [], failed, T0 + 90 * step, config, collector_previous_ok=True)
+        states = dict(result.states)
+    assert states[POD].status == STATUS_UNKNOWN
+    assert states[POD].announced_down_since is not None
+    # The collector comes back and the sensor is reporting again.
+    seen: list[str] = []
+    for step in (3, 4, 5):
+        result = evaluate(
+            states,
+            [pod_obs(last=T0 + 90 * step)],
+            OK,
+            T0 + 90 * step,
+            config,
+            collector_previous_ok=False if step == 3 else True,
+        )
+        states = dict(result.states)
+        seen.extend(kinds(result))
+    assert NOTIFY_RECOVERED in seen
+    assert states[POD].status == STATUS_OK
