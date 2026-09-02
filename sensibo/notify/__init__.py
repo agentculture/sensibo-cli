@@ -2,11 +2,11 @@
 
 The leaf that gets an alert out of the machine once the alerter has decided
 one is due (task t3). A :class:`Payload` carries the same local-execution
-marker every rule output does (:data:`sensibo.rules.model.EXECUTION_LOCAL`), so
+marker every rule output does (:data:`sensibo.health.EXECUTION_LOCAL`), so
 a receiver always knows alerts stop when this daemon stops.
 
 Layering rule (mirrors ``sensibo.rules``): this package imports only stdlib,
-plus :mod:`sensibo.api._auth` (dotenv parsing) and :mod:`sensibo.rules.model`
+plus :mod:`sensibo.api._auth` (dotenv parsing) and :mod:`sensibo.health`
 (the execution marker); it must never import :mod:`sensibo.cli`. Delivery
 failures are data, not exceptions — :func:`send` returns one :class:`Outcome`
 per configured transport and never raises.

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-02
+
+### Added
+
+- Sensor health layer (plan sensor-health-alerts-and-chart-reports, tasks t1-t10): store schema v2 with health, transitions, and notifications tables, a fail-closed StoreVersionError guard, and the batteryVoltage (mV) unit with a guarded backfill
+- sensibo/health: pure evaluation engine — measured 900s default down threshold (91s cadence probe), collector-failure state distinct from sensor-down, parent-pod-down suppression, recovery hold, cooldown and daily cap, first-run seeding with one alert per already-down location
+- sensibo/notify: generic webhook POST (redirects refused) and operator script hook (argv, no shell, timeout, API key and webhook URL stripped from the child env), webhook URL redacted everywhere, dry-run rendering
+- sensibo/report: stdlib SVG daily/weekly multi-series charts, in-daemon scheduling (07:00 host-local daily, Monday weekly, SENSIBO_REPORT_* env), files under ~/.sensibo/reports served at /reports/ on the dashboard
+- sensibo collect: evaluates health after every cycle, persists transitions and notification state (restart-safe exactly-once), records a heartbeat (last_cycle_at / last_cycle_outcome), survives ApiError in --daemon mode with one collector_unhealthy / collector_recovered alert pair, runs the report scheduler on both cycle paths
+- New verbs: sensibo query health, sensibo notify test [--apply], sensibo report daily|weekly [--out] [--apply]; sensibo doctor gains a collector_heartbeat check and --db
+- Rules: a stale leaf ({type: stale, location, after_seconds}) reading persisted health; examples/stale-room.rule.json; hysteresis, min-off-time, and rate-limit code byte-identical
+- MCP: sensibo_health tool; room_list carries health fields; dashboard and MCP show status, since, last_ok, and the collector heartbeat
+- docs/health.md: outage classes with reproducing SQL, states, thresholds, notification and report config, heartbeat, stale leaf, local-execution caveat, schema v2 upgrade and restart order
+
+### Changed
+
+- Store.record_readings commits once per poll and Store.record_series bulk-inserts one field's series in a single transaction (approved plan deviation d1; was 10.8 ms per reading)
+- Staleness has one source of truth: HealthConfig.down_after_seconds drives room list, the web dashboard, and MCP; DEFAULT_STALE_AFTER_HOURS is a deprecated derived alias
+- docs/sensibo-api.md: Room Sensor reports batteryVoltage (mV, quantized), not battery; records the 91s cadence probe
+- CLAUDE.md and docs/architecture.md no longer describe the repo as a scaffold
+
+### Fixed
+
+- A recovery could be lost when the daily cap was exhausted or when the collector itself failed between a sensor's down and its recovery (colleague review of wave 1); HealthState.announced_down_since now closes every announced outage
+
 ## [0.7.4] - 2026-09-02
 
 ### Added
