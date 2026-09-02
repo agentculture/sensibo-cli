@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Webhook POSTs carry User-Agent: sensibo-cli/<version> — Cloudflare-fronted receivers such as Discord rejected the default Python-urllib agent with 403 error code 1010
+- Webhook POSTs carry User-Agent sensibo-cli/VERSION — Cloudflare-fronted receivers such as Discord rejected the default Python-urllib agent with 403 error code 1010
 - The notification JSON mirrors message into content (Discord) and text (Slack, Mattermost) so a plain webhook URL from those services renders the alert; Discord previously answered 400 Cannot send an empty message
 
 ## [0.8.0] - 2026-09-02
