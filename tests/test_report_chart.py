@@ -43,6 +43,8 @@ def store(tmp_path: Path) -> Store:
     s.set_alias("pod-1", "Living Room AC")
     s.upsert_location("ms-1", kind="room_sensor", parent_pod_id="pod-1", room_name="Bedroom")
     s.upsert_location("ms-2", kind="room_sensor", parent_pod_id="pod-1")
+    # Known to the store but has never reported: the empty-panel case.
+    s.upsert_location("pod-quiet", kind="pod", product_model="airq", room_name="Attic")
     for location_id in ("pod-1", "ms-1", "ms-2"):
         for f in FIELDS:
             # 7 days at 90s cadence, bulk-inserted via the single-transaction
@@ -70,13 +72,14 @@ def test_seven_day_report_is_fast_and_bounded(store: Store) -> None:
 def test_report_is_well_formed_xml_with_no_script_tag(store: Store) -> None:
     svg = render_report(store, 168, now=NOW)
     root = ET.fromstring(svg)
-    assert root.tag == "svg"
+    assert root.tag.rsplit("}", 1)[-1] == "svg"  # ElementTree keeps the namespace
     assert "<script" not in svg.lower()
 
 
 def test_empty_series_renders_a_labelled_panel_not_an_error(store: Store) -> None:
     svg = render_report(store, 168, now=NOW)
     assert "no readings in window" in svg
+    assert "Attic" in svg
 
 
 def test_24_hour_title_and_every_location_label_appear(store: Store) -> None:

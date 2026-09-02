@@ -129,7 +129,13 @@ def render_report(
 
     panels: list[tuple[LocationRecord, str, str | None, list[ReadingRecord]]] = []
     for location in store.list_locations():
-        for field, latest in store.latest_readings(location.id).items():
+        latest_by_field = store.latest_readings(location.id)
+        if not any(_is_numeric(r.value) for r in latest_by_field.values()):
+            # A location the store knows but has no numeric history for still
+            # gets a labelled placeholder rather than vanishing from the report.
+            panels.append((location, "—", None, []))
+            continue
+        for field, latest in latest_by_field.items():
             if not _is_numeric(latest.value):
                 continue
             readings = [
