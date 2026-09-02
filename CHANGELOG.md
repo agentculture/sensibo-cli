@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2026-09-02
+
+### Added
+
+- docs/plans/2026-09-02-sensor-health-alerts-and-chart-reports.md: converged, exported plan (/spec-to-plan) — 11 confirmed tasks in 4 dependency waves covering all 54 spec targets, with TDD acceptance criteria, disjoint file sets per wave, and 5 plan-side risks (mixed-version upgrade window, two-writer sqlite, daemon survives ApiError, quantized batteryVoltage, manual real-fleet acceptance)
+
 ## [0.7.3] - 2026-09-02
 
 ### Added
