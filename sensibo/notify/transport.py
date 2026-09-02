@@ -27,8 +27,8 @@ import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 
+from sensibo.health import EXECUTION_LOCAL
 from sensibo.notify._config import NotifyConfig
-from sensibo.rules.model import EXECUTION_LOCAL
 
 #: Transport names used in :class:`Outcome.transport`.
 TRANSPORT_WEBHOOK = "webhook"
