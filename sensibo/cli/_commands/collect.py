@@ -23,13 +23,23 @@ import time
 from sensibo.api import ApiError, SensiboClient
 from sensibo.cli._errors import EXIT_ENV_ERROR, EXIT_USER_ERROR, CliError
 from sensibo.cli._output import emit_diagnostic, emit_result
-from sensibo.collect import DEFAULT_INTERVAL, MIN_INTERVAL, Collector
+from sensibo.collect import DEFAULT_INTERVAL, MIN_INTERVAL, Collector, default_notifier
+from sensibo.health import HealthConfig
 from sensibo.store import Store
 
 
 def build_client() -> SensiboClient:
     """Construct the real Sensibo client. Monkeypatched to a fake in tests."""
     return SensiboClient()
+
+
+def build_notifier():
+    """The real notify transport. Monkeypatched to a recorder in tests.
+
+    A seam, not a convenience: without it a test would resolve the operator's
+    real ``~/.sensibo/.env`` and could POST to their live webhook.
+    """
+    return default_notifier
 
 
 def _sleep(seconds: float) -> None:
@@ -65,6 +75,14 @@ def _render_text(summary: dict[str, object]) -> str:
             f"  backfill: {window_text}, "
             f"{backfill.get('readings_written', 0)} reading(s) recovered"
         )
+    health = summary.get("health")
+    if isinstance(health, dict):
+        lines.append(
+            f"  health: {health.get('ok', 0)} ok, {health.get('down', 0)} down, "
+            f"{health.get('unknown', 0)} unknown; "
+            f"{health.get('notifications_sent', 0)} notification(s) sent, "
+            f"{health.get('notifications_suppressed', 0)} suppressed"
+        )
     lines.append(f"  db: {summary['db']}")
     return "\n".join(lines)
 
@@ -85,11 +103,29 @@ def _run_once(collector: Collector, store: Store, json_mode: bool) -> int:
 
 
 def _run_daemon(collector: Collector, store: Store, interval: float, json_mode: bool) -> int:
+    """Loop forever. A cloud failure is a *cycle outcome*, never the end of the run.
+
+    The collector has already recorded the failed cycle and run the health
+    engine (one ``collector_unhealthy`` alert on the edge, every location
+    marked unknown) by the time the :class:`~sensibo.api.ApiError` reaches
+    here; all that is left is to say so on stderr and keep the cadence — a
+    daemon that exits on the first flaky night is a monitor that stops
+    monitoring exactly when it matters.
+    """
     emit_diagnostic(f"collect: daemon started — polling every {interval:g}s (Ctrl-C to stop)")
     cycles = 0
     try:
         while True:
-            outcome = collector.collect_once()
+            try:
+                outcome = collector.collect_once()
+            except ApiError as err:
+                cycles += 1
+                emit_diagnostic(
+                    f"collect: cycle {cycles} failed: {err.message} — "
+                    f"continuing; next poll in {interval:g}s"
+                )
+                _sleep(interval)
+                continue
             cycles += 1
             summary = _summary_dict(outcome, store, cycle=cycles)
             emit_result(summary if json_mode else _render_text(summary), json_mode=json_mode)
@@ -119,12 +155,29 @@ def cmd_collect(args: argparse.Namespace) -> int:
         )
 
     try:
+        health_config = HealthConfig.from_env()
+    except ValueError as err:
+        raise CliError(
+            code=EXIT_USER_ERROR,
+            message=str(err),
+            remediation=(
+                "unset the variable to take the default, or set it to a non-negative number"
+            ),
+        ) from None
+
+    try:
         client = build_client()
     except ApiError as err:
         raise _as_cli_error(err) from None
 
     with Store(db_path=getattr(args, "db", None)) as store:
-        collector = Collector(client, store, log=_stderr_log)
+        collector = Collector(
+            client,
+            store,
+            log=_stderr_log,
+            notifier=build_notifier(),
+            health_config=health_config,
+        )
         try:
             if args.daemon:
                 return _run_daemon(collector, store, float(args.interval), json_mode)
