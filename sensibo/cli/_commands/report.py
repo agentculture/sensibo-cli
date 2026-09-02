@@ -103,6 +103,27 @@ def _apply_report(
     return str(path), outcomes, delivered
 
 
+def _render_text(result: dict[str, object], would_path: Path, preview: str | None) -> str:
+    """The human rendering of one report run; ``preview`` is the dry-run block."""
+    lines = [f"report {result['kind']}: window={result['window_hours']}h"]
+    written_to = result["written_to"]
+    if result["apply"]:
+        outcomes = result["outcomes"]
+        assert isinstance(outcomes, list)  # nosec B101 - shape fixed by cmd_report
+        lines.append(f"  written to: {written_to}")
+        lines.append(f"  delivered to {len(outcomes)} transport(s):")
+        for outcome in outcomes:
+            mark = "ok" if outcome["ok"] else "FAILED"
+            lines.append(f"    {outcome['transport']}: {mark} ({outcome['detail']})")
+    else:
+        if written_to:
+            lines.append(f"  written to: {written_to}")
+        lines.append(f"  would write to: {would_path}")
+        lines.append(preview or "")
+    lines.append(f"  {EXECUTION_FIELD}: {EXECUTION_LOCAL}")
+    return "\n".join(lines)
+
+
 def cmd_report(args: argparse.Namespace, *, kind: str) -> int:
     json_mode = bool(getattr(args, "json", False))
     apply = bool(getattr(args, "apply", False))
@@ -129,8 +150,8 @@ def cmd_report(args: argparse.Namespace, *, kind: str) -> int:
         if apply:
             written_to, outcomes, delivered = _apply_report(kind, svg, now, config, target_dir)
             store.set_meta(_KIND_TO_META[kind], repr(now))
-        else:
-            would_path = target_dir / report_filename(kind, now)
+        would_path = target_dir / report_filename(kind, now)
+        if not apply:
             payload = build_payload(kind, would_path, resolve_dashboard_url())
 
         result = {
@@ -147,21 +168,8 @@ def cmd_report(args: argparse.Namespace, *, kind: str) -> int:
         if json_mode:
             emit_result(result, json_mode=True)
         else:
-
-            lines = [f"report {kind}: window={window_hours}h"]
-            if apply:
-                lines.append(f"  written to: {written_to}")
-                lines.append(f"  delivered to {len(outcomes)} transport(s):")
-                for outcome in outcomes:
-                    mark = "ok" if outcome["ok"] else "FAILED"
-                    lines.append(f"    {outcome['transport']}: {mark} ({outcome['detail']})")
-            else:
-                if written_to:
-                    lines.append(f"  written to: {written_to}")
-                lines.append(f"  would write to: {would_path}")
-                lines.append(render_dry_run(payload, config))
-            lines.append(f"  {EXECUTION_FIELD}: {EXECUTION_LOCAL}")
-            emit_result("\n".join(lines), json_mode=False)
+            preview = None if apply else render_dry_run(payload, config)
+            emit_result(_render_text(result, would_path, preview), json_mode=False)
     return 0
 
 
