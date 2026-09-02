@@ -28,6 +28,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Review fixes on PR #11 (Qodo, 14 items): health rows, transitions, cycle meta, and the owed-notification queue commit in one transaction so a crash cannot lose an alert; per-transport retry debt with a 20-attempt cap; failed report delivery no longer advances the schedule and the report verb exits 2; /reports/ rejects symlinks and paths resolving outside the directory; DST-correct report scheduling; doctor's heartbeat uses the daemon's persisted interval; transport setup errors and non-finite thresholds are rejected instead of escaping; API error text is scrubbed before it reaches a notification; every scheduler diagnostic is redacted
 - A recovery could be lost when the daily cap was exhausted or when the collector itself failed between a sensor's down and its recovery (colleague review of wave 1); HealthState.announced_down_since now closes every announced outage
 
 ## [0.7.4] - 2026-09-02
