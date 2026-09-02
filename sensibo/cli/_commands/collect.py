@@ -23,7 +23,13 @@ import time
 from sensibo.api import ApiError, SensiboClient
 from sensibo.cli._errors import EXIT_ENV_ERROR, EXIT_USER_ERROR, CliError
 from sensibo.cli._output import emit_diagnostic, emit_result
-from sensibo.collect import DEFAULT_INTERVAL, MIN_INTERVAL, Collector, default_notifier
+from sensibo.collect import (
+    DEFAULT_INTERVAL,
+    META_COLLECT_INTERVAL,
+    MIN_INTERVAL,
+    Collector,
+    default_notifier,
+)
 from sensibo.health import HealthConfig
 from sensibo.notify import resolve_notify_config
 from sensibo.report import ReportSchedule, reports_dir, run_due_reports
@@ -146,9 +152,15 @@ def _run_daemon(collector: Collector, store: Store, interval: float, json_mode: 
     monitoring exactly when it matters.
     """
     emit_diagnostic(f"collect: daemon started — polling every {interval:g}s (Ctrl-C to stop)")
+    # Publish the cadence so `sensibo doctor`'s collector_heartbeat check judges
+    # freshness against the interval this daemon actually runs at, not against
+    # the compiled-in default. Rewritten every cycle so a restart at a new
+    # --interval is picked up rather than leaving a stale promise behind.
+    store.set_meta(META_COLLECT_INTERVAL, repr(float(interval)))
     cycles = 0
     try:
         while True:
+            store.set_meta(META_COLLECT_INTERVAL, repr(float(interval)))
             try:
                 outcome = collector.collect_once()
             except ApiError as err:

@@ -541,6 +541,70 @@ class Store:
                 ),
             )
 
+    def set_health_many(
+        self,
+        records: Iterable[tuple[str, str, Timestamp, Timestamp | None, str | None]],
+    ) -> None:
+        """Upsert many health rows in **one** transaction.
+
+        ``records`` are ``(location_id, status, since, last_ok, parent_pod_id)``
+        tuples — the positional form of :meth:`set_health`. A collector cycle
+        rewrites every location's health row at once; doing that with one
+        :meth:`set_health` call per location costs one fsync per location and
+        leaves a window where the map on disk is half this cycle and half the
+        last (Qodo review: "Health persistence commits per-location").
+        """
+        rows = [_health_row_params(record) for record in records]
+        if not rows:
+            return
+        with self._conn:
+            self._conn.executemany(_schema.UPSERT_HEALTH_SQL, rows)
+
+    def persist_health_cycle(
+        self,
+        *,
+        health_rows: Iterable[tuple[str, str, Timestamp, Timestamp | None, str | None]],
+        transitions: Iterable[tuple[str, str | None, str, Timestamp]],
+        meta: Mapping[str, str] | None = None,
+        meta_from_transitions: Any = None,
+    ) -> list[int]:
+        """Persist one health cycle — rows, transitions and meta — in one commit.
+
+        Returns the ids of the appended transitions, in the order given.
+
+        This is the crash-safety primitive behind the alerting path: a health
+        state that has been committed without the transition (and without the
+        owed-notification debt that transition carries) is an alert nobody can
+        recover, because the *next* cycle sees no edge to re-announce. Writing
+        all three inside a single ``with self._conn`` block means a process
+        exit either loses the whole cycle — which the next cycle re-derives —
+        or keeps it whole.
+
+        ``meta_from_transitions``, when given, is called with the freshly
+        allocated transition ids **inside** the transaction and must return
+        further meta pairs to write. That is what lets the owed-notification
+        queue, whose entries reference transition ids that do not exist until
+        the inserts run, land atomically with the rows it points at.
+        """
+        rows = [_health_row_params(record) for record in health_rows]
+        transition_list = list(transitions)
+        ids: list[int] = []
+        with self._conn:
+            if rows:
+                self._conn.executemany(_schema.UPSERT_HEALTH_SQL, rows)
+            for location_id, from_status, to_status, at in transition_list:
+                cursor = self._conn.execute(
+                    _schema.INSERT_TRANSITION_SQL,
+                    (location_id, from_status, to_status, _normalize_timestamp(at)),
+                )
+                ids.append(int(cursor.lastrowid))
+            pairs: dict[str, str] = dict(meta or {})
+            if meta_from_transitions is not None:
+                pairs.update(meta_from_transitions(list(ids)))
+            for key, value in pairs.items():
+                self._conn.execute(_schema.SET_META_SQL, (key, value))
+        return ids
+
     def get_health(self, location_id: str) -> HealthRecord | None:
         """The location's current health row, or ``None`` if never recorded."""
         row = self._conn.execute(_schema.SELECT_HEALTH_SQL, (location_id,)).fetchone()
@@ -649,6 +713,20 @@ class Store:
         )
         rows = self._conn.execute(sql, params).fetchall()
         return [_row_to_notification(row) for row in rows]
+
+
+def _health_row_params(
+    record: tuple[str, str, Timestamp, Timestamp | None, str | None],
+) -> tuple[Any, ...]:
+    """Normalise one ``(location_id, status, since, last_ok, parent)`` tuple."""
+    location_id, status, since, last_ok, parent_pod_id = record
+    return (
+        location_id,
+        status,
+        _normalize_timestamp(since),
+        None if last_ok is None else _normalize_timestamp(last_ok),
+        parent_pod_id,
+    )
 
 
 def _build_log_query(

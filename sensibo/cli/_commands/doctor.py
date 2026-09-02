@@ -33,7 +33,7 @@ import time
 
 from sensibo.cli._commands.whoami import find_culture_yaml, read_agent_fields
 from sensibo.cli._output import emit_result
-from sensibo.collect import DEFAULT_INTERVAL
+from sensibo.collect import DEFAULT_INTERVAL, META_COLLECT_INTERVAL
 from sensibo.store import Store, StoreVersionError
 
 # backend → required prompt file (the backend-consistency mapping).
@@ -69,13 +69,32 @@ def _parse_meta_timestamp(raw: str | None) -> float | None:
     return dt.timestamp()
 
 
+def _parse_interval(raw: str | None) -> float:
+    """The daemon's own poll interval, or :data:`DEFAULT_INTERVAL` if unknown.
+
+    A non-positive or unparseable value falls back too: this check must never
+    divide an operator's freshness bound down to nothing on a corrupt meta row.
+    """
+    if raw is None:
+        return float(DEFAULT_INTERVAL)
+    try:
+        interval = float(raw)
+    except ValueError:
+        return float(DEFAULT_INTERVAL)
+    return interval if interval > 0 else float(DEFAULT_INTERVAL)
+
+
 def _collector_heartbeat_check(db_path: str | None) -> dict[str, object]:
     """Is the collector still cycling? Reads the ``last_cycle_at`` / ``last_cycle_outcome``
     meta keys a sibling task's ``sensibo collect`` writes each cycle.
 
     Healthy iff a heartbeat is present and no older than 3x the poll interval
-    (:data:`sensibo.collect.DEFAULT_INTERVAL`) — three missed cycles, not one,
-    so a single slow poll never flaps this check. Severity is ``warning``, not
+    — three missed cycles, not one, so a single slow poll never flaps this
+    check. The interval is the daemon's own, read from the ``collect_interval``
+    meta key it publishes each cycle, falling back to
+    :data:`sensibo.collect.DEFAULT_INTERVAL` when no daemon has ever run:
+    an operator who deliberately polls every 10 minutes must not be told their
+    collector is dead four minutes after each cycle. Severity is ``warning``, not
     ``error``: a fresh checkout or a machine that has simply never run
     ``collect`` is not an identity-invariant failure, so this check reports
     itself unhealthy without pulling overall ``doctor`` healthy down with it
@@ -85,6 +104,7 @@ def _collector_heartbeat_check(db_path: str | None) -> dict[str, object]:
         with Store(db_path=db_path) as store:
             last_cycle_at = store.get_meta("last_cycle_at")
             last_cycle_outcome = store.get_meta("last_cycle_outcome")
+            configured_interval = store.get_meta(META_COLLECT_INTERVAL)
     except StoreVersionError as err:
         return {
             "id": "collector_heartbeat",
@@ -94,12 +114,18 @@ def _collector_heartbeat_check(db_path: str | None) -> dict[str, object]:
             "remediation": err.remediation,
         }
 
+    interval = _parse_interval(configured_interval)
     ts = _parse_meta_timestamp(last_cycle_at)
-    healthy = ts is not None and (time.time() - ts) <= 3 * DEFAULT_INTERVAL
+    healthy = ts is not None and (time.time() - ts) <= 3 * interval
     if last_cycle_at is None:
-        message = "no collector heartbeat recorded yet (last_cycle_at unset)"
+        message = (
+            f"no collector heartbeat recorded yet (last_cycle_at unset); {interval:g}s cadence"
+        )
     else:
-        message = f"last_cycle_at={last_cycle_at} last_cycle_outcome={last_cycle_outcome}"
+        message = (
+            f"last_cycle_at={last_cycle_at} last_cycle_outcome={last_cycle_outcome} "
+            f"interval={interval:g}s (stale after {3 * interval:g}s)"
+        )
     return {
         "id": "collector_heartbeat",
         "passed": healthy,

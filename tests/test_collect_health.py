@@ -17,6 +17,7 @@ Two rules hold for every test here, both load-bearing:
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 
@@ -24,6 +25,7 @@ import sensibo.cli._commands.collect as collect_cmd
 from sensibo.api import ApiError
 from sensibo.cli import main
 from sensibo.collect import (
+    MAX_OWED_ATTEMPTS,
     META_COLLECTOR_OK,
     META_HEALTH_EXTRA,
     META_HEALTH_OWED,
@@ -99,20 +101,49 @@ class _FakeClient:
 
 
 class _RecordingNotifier:
-    """Stands in for :func:`sensibo.notify.send` — records, never delivers."""
+    """Stands in for :func:`sensibo.notify.send` — records, never delivers.
+
+    ``only`` mirrors the real transport's partial-redelivery parameter: the
+    collector passes it when retrying just the legs that still owe delivery.
+    """
 
     def __init__(self, ok: bool = True) -> None:
         self.ok = ok
         self.payloads: list = []
+        self.onlys: list = []
 
-    def __call__(self, payload):
+    def __call__(self, payload, only=None):
         self.payloads.append(payload)
+        self.onlys.append(None if only is None else list(only))
         detail = "delivered" if self.ok else "network error: refused"
         return [Outcome("webhook", self.ok, detail)]
 
     @property
     def kinds(self) -> list[str]:
         return [payload.kind for payload in self.payloads]
+
+
+class _SplitNotifier:
+    """Two transports: ``webhook`` always accepts, ``script`` fails until told not to.
+
+    The partial-delivery case Qodo 12 flagged: one success used to mark the
+    whole notification delivered, so the failed leg was never retried.
+    """
+
+    def __init__(self) -> None:
+        self.script_ok = False
+        self.calls: list[tuple[str, list | None]] = []
+
+    def __call__(self, payload, only=None):
+        self.calls.append((payload.kind, None if only is None else sorted(only)))
+        outcomes = []
+        if only is None or "webhook" in only:
+            outcomes.append(Outcome("webhook", True, "delivered"))
+        if only is None or "script" in only:
+            outcomes.append(
+                Outcome("script", self.script_ok, "delivered" if self.script_ok else "exit code 1")
+            )
+        return outcomes
 
 
 @pytest.fixture(autouse=True)
@@ -161,8 +192,10 @@ def test_cycle_writes_failed_outcome_meta_and_a_redacted_reason(tmp_path) -> Non
     client = _FakeClient(failures=1)
     notifier = _RecordingNotifier()
     with Store(db_path=tmp_path / "s.db") as store:
+        collector = _collector(client, store, notifier)
+        # Exactly one invocation inside the raises block (Sonar S5778).
         with pytest.raises(ApiError):
-            _collector(client, store, notifier).run_cycle(now=NOW)
+            collector.run_cycle(now=NOW)
 
         outcome = store.get_meta(META_LAST_CYCLE_OUTCOME)
         assert outcome is not None
@@ -342,7 +375,7 @@ def test_cycle_result_carries_health_counts(tmp_path) -> None:
 # --- CLI wiring ------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def patched_client(monkeypatch):
     def _install(client: _FakeClient) -> _FakeClient:
         monkeypatch.setattr(collect_cmd, "build_client", lambda: client)
@@ -423,3 +456,171 @@ def test_collect_rejects_a_bad_health_threshold_as_a_user_error(
     assert err.startswith("error:")
     assert "hint:" in err
     assert "SENSIBO_HEALTH_DOWN_AFTER" in err
+
+
+# --- Qodo review fixes (PR #11) --------------------------------------------
+
+
+class _CountingConnection:
+    """Counts committed transactions — ``sqlite3.Connection`` cannot be patched.
+
+    Every ``with self._conn:`` block in the store is exactly one transaction, so
+    counting ``__exit__`` counts commits.
+    """
+
+    def __init__(self, wrapped: sqlite3.Connection) -> None:
+        self.wrapped = wrapped
+        self.transactions = 0
+
+    def __enter__(self):
+        return self.wrapped.__enter__()
+
+    def __exit__(self, *exc_info):
+        self.transactions += 1
+        return self.wrapped.__exit__(*exc_info)
+
+    def __getattr__(self, name):
+        return getattr(self.wrapped, name)
+
+
+def test_owed_notification_is_dropped_after_the_attempt_cap(tmp_path, capsys) -> None:
+    """Q3: the owed queue retries once per cycle and gives up, it does not spin forever.
+
+    No exponential backoff is expected — the cycle cadence is the spacing — but
+    the debt must expire, be logged once, and leave an audit row behind.
+    """
+    client = _FakeClient(_snapshot(_pod(at=NOW - 6 * HOUR)))
+    failing = _RecordingNotifier(ok=False)
+    logged: list[str] = []
+    with Store(db_path=tmp_path / "s.db") as store:
+        collector = Collector(client, store, notifier=failing, log=logged.append)
+        for index in range(MAX_OWED_ATTEMPTS):
+            collector.run_cycle(now=NOW + index * 90)
+
+        assert json.loads(store.get_meta(META_HEALTH_OWED)) == []
+        dropped = [n for n in store.list_notifications() if n.outcome.startswith("dropped after")]
+        assert len(dropped) == 1
+        assert dropped[0].outcome == f"dropped after {MAX_OWED_ATTEMPTS} attempts"
+        assert dropped[0].kind == NOTIFY_DOWN
+        assert sum("giving up" in line for line in logged) == 1
+
+
+def test_health_rows_are_persisted_in_one_transaction_not_one_per_location(
+    tmp_path, monkeypatch
+) -> None:
+    """Q7: five locations must not mean five health commits."""
+    pods = []
+    for index in range(5):
+        pod = _pod(at=NOW)
+        pod["id"] = f"pod-{index}"
+        pods.append(pod)
+    client = _FakeClient(_snapshot(*pods))
+    notifier = _RecordingNotifier()
+
+    def _forbidden(*args, **kwargs):  # pragma: no cover - the assertion is that it never runs
+        raise AssertionError("set_health must not be called per location during a cycle")
+
+    monkeypatch.setattr(Store, "set_health", _forbidden)
+    with Store(db_path=tmp_path / "s.db") as store:
+        _collector(client, store, notifier).run_cycle(now=NOW)
+        assert len(store.list_health()) == 5
+
+    # …and the bulk method really is one transaction, not five.
+    with Store(db_path=tmp_path / "bulk.db") as store:
+        counting = _CountingConnection(store._conn)
+        store._conn = counting
+        store.set_health_many((f"pod-{index}", STATUS_OK, NOW, NOW, None) for index in range(5))
+        assert counting.transactions == 1
+        assert len(store.list_health()) == 5
+        store._conn = counting.wrapped
+
+
+def test_a_crash_after_persistence_still_delivers_the_alert_next_cycle(tmp_path) -> None:
+    """Q11: transitions and the owed debt are committed before any transport runs.
+
+    The old order committed the *health state* first, so a process exit before
+    the transition was written left the location recorded as down with no edge
+    left for the next cycle to re-announce — the alert was simply lost.
+    """
+    client = _FakeClient(_snapshot(_pod(at=NOW - 6 * HOUR)))
+    crashing = _RecordingNotifier()
+
+    class _Crash(RuntimeError):
+        pass
+
+    def _die(*args, **kwargs):
+        raise _Crash("process exited between persistence and delivery")
+
+    db = tmp_path / "s.db"
+    with Store(db_path=db) as store:
+        collector = _collector(client, store, crashing)
+        collector._dispatch = _die
+        with pytest.raises(_Crash):
+            collector.run_cycle(now=NOW)
+
+    # The process is gone; nothing was delivered. Reopen the store as a restart.
+    with Store(db_path=db) as store:
+        transition = store.list_transitions("pod-airpro")[0]
+        assert transition.to_status == STATUS_DOWN
+        assert transition.notified_at is None
+        assert len(json.loads(store.get_meta(META_HEALTH_OWED))) == 1
+
+        working = _RecordingNotifier()
+        _collector(_FakeClient(_snapshot(_pod(at=NOW - 6 * HOUR))), store, working).run_cycle(
+            now=NOW + 90
+        )
+        assert working.kinds == [NOTIFY_DOWN]
+        assert store.list_transitions("pod-airpro")[0].notified_at == NOW + 90
+        assert json.loads(store.get_meta(META_HEALTH_OWED)) == []
+
+
+def test_a_partly_delivered_alert_retries_only_the_failed_transport(tmp_path) -> None:
+    """Q12: a webhook success must not cancel the script leg's debt."""
+    client = _FakeClient(_snapshot(_pod(at=NOW - 6 * HOUR)))
+    split = _SplitNotifier()
+    with Store(db_path=tmp_path / "s.db") as store:
+        collector = _collector(client, store, split)
+        collector.run_cycle(now=NOW)
+
+        # The webhook accepted it, so the transition is stamped…
+        assert store.list_transitions("pod-airpro")[0].notified_at == NOW
+        # …but the script still owes delivery, and only the script.
+        owed = json.loads(store.get_meta(META_HEALTH_OWED))
+        assert [entry["transports"] for entry in owed] == [["script"]]
+
+        collector.run_cycle(now=NOW + 90)
+        assert split.calls[-1] == (NOTIFY_DOWN, ["script"])  # webhook not re-sent
+
+        split.script_ok = True
+        collector.run_cycle(now=NOW + 180)
+        assert json.loads(store.get_meta(META_HEALTH_OWED)) == []
+
+        by_transport = [(n.transport, n.outcome) for n in store.list_notifications()]
+        assert ("script", "delivered") in by_transport
+        assert by_transport.count(("webhook", "delivered")) == 1
+
+
+def test_a_collector_error_is_scrubbed_before_it_reaches_a_notification(tmp_path) -> None:
+    """Q17: the raw ApiError text lands in an outbound webhook body — scrub it first."""
+
+    class _LeakyClient(_FakeClient):
+        def fleet_snapshot(self, fields: str = "*") -> dict:
+            raise ApiError(
+                code=3,
+                message=(
+                    "GET https://home.sensibo.com/api/v2/users/me/pods"
+                    "?fields=*&apiKey=SECRET123 failed: HTTP 500"
+                ),
+                remediation="retry later",
+            )
+
+    notifier = _RecordingNotifier()
+    with Store(db_path=tmp_path / "s.db") as store:
+        collector = _collector(_LeakyClient(), store, notifier)
+        with pytest.raises(ApiError):
+            collector.run_cycle(now=NOW)
+
+    assert notifier.kinds == [NOTIFY_COLLECTOR_UNHEALTHY]
+    message = notifier.payloads[0].message
+    assert "SECRET123" not in message
+    assert "apiKey=REDACTED" in message
