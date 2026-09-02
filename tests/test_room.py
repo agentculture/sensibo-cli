@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from sensibo.health.model import DEFAULT_DOWN_AFTER_SECONDS, HealthConfig
 from sensibo.store import KIND_POD, KIND_ROOM_SENSOR, Store
 from sensibo.store.rooms import (
     DEFAULT_STALE_AFTER_HOURS,
@@ -180,5 +181,10 @@ def test_is_stale_defaults_to_the_real_clock_when_now_is_omitted() -> None:
     assert is_stale(time.time() - 1000 * 3600, stale_after_hours=24) is True
 
 
-def test_default_stale_after_is_24_hours() -> None:
-    assert DEFAULT_STALE_AFTER_HOURS == 24.0
+def test_default_stale_after_is_derived_from_health_config() -> None:
+    # Task t9: DEFAULT_STALE_AFTER_HOURS is no longer a hardcoded 24h -- it's
+    # a deprecated, backward-compatible derived alias of HealthConfig's own
+    # down_after_seconds default (900s), the single source of truth.
+    assert DEFAULT_STALE_AFTER_HOURS == DEFAULT_DOWN_AFTER_SECONDS / 3600.0
+    assert DEFAULT_STALE_AFTER_HOURS == HealthConfig().down_after_seconds / 3600.0
+    assert DEFAULT_STALE_AFTER_HOURS == pytest.approx(0.25)

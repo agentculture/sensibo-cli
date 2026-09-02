@@ -27,10 +27,20 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+from sensibo.health.model import HealthConfig
+
 from .store import LocationRecord, Store
 
-#: Default staleness threshold for ``sensibo room list``'s STALE flag.
-DEFAULT_STALE_AFTER_HOURS = 24.0
+#: Deprecated. Hours form of :class:`~sensibo.health.model.HealthConfig`'s
+#: default ``down_after_seconds`` (900s -> 0.25h) — kept only so existing
+#: imports of this name keep resolving. As of task t9, :class:`HealthConfig`
+#: (loaded via :meth:`HealthConfig.from_env` at the CLI/server boundary) is
+#: the single source of truth for staleness: every caller (``room list``, the
+#: web dashboard, the MCP tools) should derive its threshold from a
+#: ``HealthConfig`` instance rather than this constant, so an operator's
+#: ``SENSIBO_HEALTH_DOWN_AFTER`` override is honored everywhere a STALE flag
+#: is computed, not just where the health evaluator itself runs.
+DEFAULT_STALE_AFTER_HOURS = HealthConfig().down_after_seconds / 3600.0
 
 
 class LocationResolutionError(Exception):
