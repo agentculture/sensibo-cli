@@ -55,7 +55,7 @@
   - honesty: After every cycle meta.`last_cycle_at` is updated; sensibo query health --json and sensibo doctor both show it, and the opt-in heartbeat notification fires once per day when enabled
 - Staleness has one source of truth: the per-kind thresholds that drive alerts also drive the STALE flag in room list, the web dashboard, and the MCP locations tool, replacing the 24h `DEFAULT_STALE_AFTER_HOURS` default so a sensor never reads fresh on the dashboard while an alert has fired
   - honesty: room list, the dashboard, and the MCP locations tool derive STALE from the same threshold config the alerter uses; a test asserts they agree for a location just past threshold
-- The rules grammar gains exactly one leaf: {type: stale, location: <name>, \[`after_seconds`\]} - true when the named location's persisted health is down or unknown (default threshold from the health config); rule dry-run output shows the stale evaluation like any other leaf, and the compressor safety gates are unchanged
+- The rules grammar gains exactly one leaf: {type: stale, location: LOCATION, `after_seconds`: optional} - true when the named location's persisted health is down or unknown (default threshold from the health config); rule dry-run output shows the stale evaluation like any other leaf, and the compressor safety gates are unchanged
   - honesty: A rule with a stale leaf on a location that stopped reporting evaluates true in dry-run within the threshold, false again after recovery, and tests/`test_rules_engine.py` covers both; the hysteresis and rate-limit tests are unchanged
 
 ## Honesty conditions
