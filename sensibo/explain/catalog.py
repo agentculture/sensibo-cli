@@ -317,6 +317,65 @@ is running, unlike Sensibo's own cloud automation (`smartmode`, `schedule`,
     sensibo notify overview --json
 """
 
+_REPORT = """\
+# sensibo report
+
+Render an offline, self-contained SVG report straight from the local store —
+one panel per (location, numeric field) pair, no network access, no external
+assets, no JavaScript (`sensibo.report.render_report`, task t4). `daily`
+covers the trailing 24 hours; `weekly` the trailing 7 days.
+
+**Dry-run by default**, like every write verb in this project: without
+`--out` or `--apply`, prints where the report *would* be written
+(`SENSIBO_REPORTS_DIR`, else `~/.sensibo/reports`) and the redacted
+transport(s) it would notify, and writes nothing. `--out PATH` writes the
+rendered SVG to `PATH` — allowed without `--apply`, the same as any verb that
+takes an explicit output path. `--apply` writes into the reports directory,
+records the last-sent instant so the in-daemon scheduler (`sensibo collect
+--daemon`) treats this run as satisfying that kind's next due check, and
+delivers a notification — a small JSON message naming the file path (plus a
+dashboard link when `SENSIBO_DASHBOARD_URL` is set), **never a file upload** —
+through the configured transport(s), exactly once.
+
+**In-daemon scheduling.** `sensibo collect --daemon` runs the same scheduler
+after every poll cycle (success or failure): `SENSIBO_REPORT_DAILY_AT` /
+`SENSIBO_REPORT_WEEKLY_AT` (`HH:MM`, host-local time, default `07:00`) and
+`SENSIBO_REPORT_WEEKLY_DAY` (`0`-`6`, `0`=Monday, default `0`) decide when
+each kind is next due. A report is due when the most recent scheduled instant
+is later than the last one actually written — a daemon that was down across
+several missed instants gets at most one catch-up report per kind, never a
+backlog. This CLI verb and the daemon hook share the same last-sent meta keys,
+so a manual `sensibo report daily --apply` also satisfies that day's due check.
+
+Every response — text and `--json` — carries `execution: local (stops when
+this daemon stops)`: like `notify test`, delivery only ever happens on demand
+or while `sensibo collect --daemon` is running.
+
+## Verbs
+
+- `sensibo report daily [--out PATH] [--apply] [--db PATH]` — trailing 24h.
+- `sensibo report weekly [--out PATH] [--apply] [--db PATH]` — trailing 7d.
+- `sensibo report overview` — describe this noun.
+
+## Usage
+
+    sensibo report daily                  # dry-run preview, nothing written
+    sensibo report daily --out out.svg    # write a copy, nothing sent
+    sensibo report daily --apply          # writes + delivers, exactly once
+    sensibo report weekly --apply --json
+    sensibo report overview --json
+
+## Environment
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `SENSIBO_REPORTS_DIR` | Where `--apply` writes reports | `~/.sensibo/reports` |
+| `SENSIBO_DASHBOARD_URL` | Base URL added to the delivery message | (omitted) |
+| `SENSIBO_REPORT_DAILY_AT` | Daily due time, `HH:MM` host-local | `07:00` |
+| `SENSIBO_REPORT_WEEKLY_AT` | Weekly due time, `HH:MM` host-local | `07:00` |
+| `SENSIBO_REPORT_WEEKLY_DAY` | Weekly due day, `0`-`6` (`0`=Monday) | `0` |
+"""
+
 _ROOM = """\
 # sensibo room
 
@@ -761,6 +820,10 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("notify",): _NOTIFY,
     ("notify", "overview"): _NOTIFY,
     ("notify", "test"): _NOTIFY,
+    ("report",): _REPORT,
+    ("report", "overview"): _REPORT,
+    ("report", "daily"): _REPORT,
+    ("report", "weekly"): _REPORT,
     ("room",): _ROOM,
     ("room", "overview"): _ROOM,
     ("room", "list"): _ROOM_LIST,
@@ -830,6 +893,7 @@ COMMAND_ORDER: tuple[tuple[str, ...], ...] = (
     ("collect",),
     ("query",),
     ("notify",),
+    ("report",),
     ("room",),
     ("rule",),
     ("smartmode",),
@@ -855,6 +919,7 @@ SUMMARIES: dict[tuple[str, ...], str] = {
     ("collect",): "Poll the fleet on a cadence into the local store.",
     ("query",): "Offline reads from the local store, incl. sensor health.",
     ("notify",): "Preview or send a test notification (dry-run by default).",
+    ("report",): "Offline SVG report: render, and optionally deliver (dry-run by default).",
     ("room",): "Name sensing locations; flag stale sensors.",
     ("rule",): "Local rules engine: dry-run before arm, hysteresis.",
     ("smartmode",): "Climate React — runs in Sensibo's cloud.",
