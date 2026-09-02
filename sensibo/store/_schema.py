@@ -270,11 +270,11 @@ ON CONFLICT(location_id) DO UPDATE SET
 """
 
 SELECT_HEALTH_SQL = (
-    "SELECT location_id, status, since, last_ok, parent_pod_id FROM health " "WHERE location_id = ?"
+    "SELECT location_id, status, since, last_ok, parent_pod_id FROM health WHERE location_id = ?"
 )
 
 SELECT_ALL_HEALTH_SQL = (
-    "SELECT location_id, status, since, last_ok, parent_pod_id FROM health " "ORDER BY location_id"
+    "SELECT location_id, status, since, last_ok, parent_pod_id FROM health ORDER BY location_id"
 )
 
 INSERT_TRANSITION_SQL = (

@@ -21,6 +21,7 @@ stays dependency-free in both directions; the two are asserted equal by test.
 from __future__ import annotations
 
 import datetime
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -101,6 +102,11 @@ def _positive_number(raw: str, name: str) -> float:
         value = float(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{name} must be a number, got {raw!r}") from exc
+    if not math.isfinite(value):
+        # nan/inf both pass `< 0` silently (nan compares False to everything,
+        # inf is never negative) — that would leave a threshold that never
+        # trips, which is worse than a loud rejection here.
+        raise ValueError(f"{name} must be a finite number, got {raw!r}")
     if value < 0:
         raise ValueError(f"{name} must not be negative, got {raw!r}")
     return value
@@ -133,10 +139,14 @@ class HealthConfig:
     daily_cap: int = DEFAULT_DAILY_CAP
 
     def __post_init__(self) -> None:
+        if not math.isfinite(self.down_after_seconds):
+            raise ValueError("down_after_seconds must be finite")
         if self.down_after_seconds <= 0:
             raise ValueError("down_after_seconds must be positive")
         if self.recovery_hold_cycles < 1:
             raise ValueError("recovery_hold_cycles must be at least 1")
+        if not math.isfinite(self.cooldown_seconds):
+            raise ValueError("cooldown_seconds must be finite")
         if self.cooldown_seconds < 0:
             raise ValueError("cooldown_seconds must not be negative")
         if self.daily_cap < 0:

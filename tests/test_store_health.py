@@ -27,7 +27,7 @@ from sensibo.store import (
 from tests._fixtures_fleet import AIRQ_POD, LIVE_ROOM_SENSOR, POD_ID
 
 
-@pytest.fixture()
+@pytest.fixture
 def store(tmp_path: Path) -> Store:
     s = Store(db_path=tmp_path / "sensibo.db")
     yield s
@@ -172,7 +172,8 @@ def test_backfill_units_v2_tags_legacy_rows_and_is_idempotent(tmp_path: Path) ->
 
         assert store.backfill_units_v2() == 1
         row = store.latest_reading("ms_aaa111", "batteryVoltage")
-        assert row is not None and row.unit == "mV"
+        assert row is not None
+        assert row.unit == "mV"
 
         # Second run is a no-op: the meta guard short-circuits it.
         assert store.backfill_units_v2() == 0
@@ -200,7 +201,8 @@ def test_backfill_leaves_an_explicit_unit_alone(tmp_path: Path) -> None:
             store._conn.execute("DELETE FROM meta WHERE key = 'units_backfill_v2'")
         assert store.backfill_units_v2() == 0
         row = store.latest_reading("ms_aaa111", "batteryVoltage")
-        assert row is not None and row.unit == "V"
+        assert row is not None
+        assert row.unit == "V"
 
 
 # --- criterion 4: health / transitions / notifications API ------------------

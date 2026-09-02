@@ -25,7 +25,7 @@ from sensibo.store import Store
 # --- fixtures ----------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def block_network(monkeypatch: pytest.MonkeyPatch) -> None:
     """Blow up on any socket use — proves `query health` never touches the network."""
 
