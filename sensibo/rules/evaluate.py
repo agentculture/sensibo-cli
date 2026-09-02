@@ -23,6 +23,7 @@ import operator
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from sensibo.health.model import STATUS_OK, STATUS_UNKNOWN, iso8601
 from sensibo.store import (
     AmbiguousLocationError,
     LocationNotFoundError,
@@ -96,6 +97,8 @@ def _evaluate_leaf(store: Store, cond: dict[str, Any], *, now_ts: float) -> Cond
         return _evaluate_threshold(store, cond)
     if kind == "occupancy":
         return _evaluate_occupancy(store, cond)
+    if kind == "stale":
+        return _evaluate_stale(store, cond, now_ts=now_ts)
     return _evaluate_time_window(cond, now_ts=now_ts)
 
 
@@ -165,6 +168,57 @@ def _evaluate_occupancy(store: Store, cond: dict[str, Any]) -> ConditionResult:
     tried = ", ".join(fields)
     return ConditionResult(
         met=False, detail=f"occupancy in {name}: no reading for any of [{tried}]"
+    )
+
+
+def _evaluate_stale(store: Store, cond: dict[str, Any], *, now_ts: float) -> ConditionResult:
+    """Is this location's *sensor* untrustworthy right now?
+
+    Reads the health row the collector persists (:meth:`Store.get_health`)
+    rather than re-deriving staleness here, so one rule and the alerting path
+    can never disagree about whether a room is reporting.
+
+    Met (i.e. STALE) when the stored status is anything but ``ok``, when there
+    is no stored status at all, or — with ``after_seconds`` — when the last
+    known-good instant is older than that budget. An unresolvable location is
+    the one case that stays *unmet*, matching every other leaf: a rule must not
+    act on a name the store cannot even place.
+    """
+    name = cond["location"]
+    budget = cond.get("after_seconds")
+
+    loc_id, note = _resolve(store, name)
+    if loc_id is None:
+        return ConditionResult(met=False, detail=f"stale in {name}: {note}")
+
+    record = store.get_health(loc_id)
+    if record is None:
+        return ConditionResult(
+            met=True,
+            detail=(
+                f"stale in {name}: status={STATUS_UNKNOWN} (no health recorded yet), "
+                f"last_ok={iso8601(None)}"
+            ),
+        )
+
+    reason = "" if record.status == STATUS_OK else f" (status is not {STATUS_OK})"
+    met = record.status != STATUS_OK
+    if budget is not None:
+        age = None if record.last_ok is None else now_ts - record.last_ok
+        overdue = age is None or age > float(budget)
+        if overdue and not met:
+            reason = f" (last ok more than {budget}s ago)"
+        met = met or overdue
+        budget_note = f", after_seconds={budget}"
+    else:
+        budget_note = ""
+
+    return ConditionResult(
+        met=met,
+        detail=(
+            f"stale in {name}: status={record.status}, "
+            f"last_ok={iso8601(record.last_ok)}{budget_note}{reason}"
+        ),
     )
 
 
