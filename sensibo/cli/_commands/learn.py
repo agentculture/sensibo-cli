@@ -49,10 +49,12 @@ comes to rest on your machine, not that the transport avoids the internet.
 
 STATUS: all three pillars are shipped, plus the integration surfaces
 (Python import, MCP, LAN web dashboard), plus sensor health tracking
-(`query health`) and test notifications (`notify test`) — both carry the
-local-execution marker `execution: local (stops when this daemon stops)`:
-health tracking and alerting only run while `sensibo collect` is running,
-unlike Sensibo's own cloud automation.
+(`query health`), test notifications (`notify test`), and offline SVG reports
+(`report daily`/`report weekly`, dry-run by default, `--apply` writes and
+delivers) — all of which carry the local-execution marker
+`execution: local (stops when this daemon stops)`: health tracking, alerting,
+and the in-daemon report scheduler only run while `sensibo collect` is
+running, unlike Sensibo's own cloud automation.
 
 Commands
 --------

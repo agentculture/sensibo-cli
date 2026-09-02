@@ -25,6 +25,8 @@ from sensibo.cli._errors import EXIT_ENV_ERROR, EXIT_USER_ERROR, CliError
 from sensibo.cli._output import emit_diagnostic, emit_result
 from sensibo.collect import DEFAULT_INTERVAL, MIN_INTERVAL, Collector, default_notifier
 from sensibo.health import HealthConfig
+from sensibo.notify import resolve_notify_config
+from sensibo.report import ReportSchedule, reports_dir, run_due_reports
 from sensibo.store import Store
 
 
@@ -45,6 +47,37 @@ def build_notifier():
 def _sleep(seconds: float) -> None:
     """Wait between daemon cycles. A seam tests replace to avoid real sleeping."""
     time.sleep(seconds)
+
+
+def run_report_hook(store: Store, now: float) -> None:
+    """After each daemon cycle, generate/deliver any due reports (task t7).
+
+    Module-level seam — like :func:`build_client` and :func:`build_notifier` —
+    so a test can replace it with a recorder instead of touching the real
+    ``~/.sensibo/reports`` directory or a real notify transport.
+
+    Called on *every* cycle in :func:`_run_daemon`, success or failure: a
+    scheduling misconfiguration (a bad ``SENSIBO_REPORT_*`` env var) or a
+    delivery hiccup must never stop collection, so both failure modes are
+    caught and logged here rather than propagated.
+    """
+    try:
+        schedule = ReportSchedule.from_env()
+    except ValueError as err:
+        emit_diagnostic(f"collect: report schedule misconfigured: {err}")
+        return
+    try:
+        run_due_reports(
+            store,
+            schedule,
+            resolve_notify_config(),
+            now,
+            build_notifier(),
+            reports_dir(),
+            log=emit_diagnostic,
+        )
+    except Exception as err:  # noqa: BLE001 - defensive: run_due_reports shouldn't raise
+        emit_diagnostic(f"collect: report hook failed: {err}")
 
 
 def _stderr_log(message: str) -> None:
@@ -124,11 +157,13 @@ def _run_daemon(collector: Collector, store: Store, interval: float, json_mode: 
                     f"collect: cycle {cycles} failed: {err.message} — "
                     f"continuing; next poll in {interval:g}s"
                 )
+                run_report_hook(store, time.time())
                 _sleep(interval)
                 continue
             cycles += 1
             summary = _summary_dict(outcome, store, cycle=cycles)
             emit_result(summary if json_mode else _render_text(summary), json_mode=json_mode)
+            run_report_hook(store, time.time())
             _sleep(interval)
     except KeyboardInterrupt:
         emit_diagnostic(f"collect: stopped cleanly after {cycles} cycle(s)")
