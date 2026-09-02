@@ -10,6 +10,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - validate-delivery skill vendored from devague (the execution-to-evidence leg: behavioral tests agent-side, evidence and delta records via the devague CLI)
+- docs/specs/2026-09-02-sensor-health-alerts-and-chart-reports.md: converged, exported spec (/think) — 23 confirmed claims, 15 confirmed honesty conditions, 3 user decisions (SVG reports, notification-only, in-daemon scheduling)
 - devague frame sensor-health-alerts-and-chart-reports: /scope survey for sensor health tracking, down detection, webhook/script notifications, and daily/weekly chart reports (17 claims, 12 scope entries with provenance, 3 open questions, 3 parked unknowns)
 
 ### Changed
