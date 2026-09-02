@@ -8,6 +8,7 @@ store, or could make a network call.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import datetime
 import inspect
 from pathlib import Path
@@ -117,7 +118,7 @@ def test_evaluate_signature_is_the_agreed_contract() -> None:
 
 def test_records_are_frozen_dataclasses() -> None:
     state = HealthState(location_id=POD, status=STATUS_OK, since=T0)
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         state.status = STATUS_DOWN  # type: ignore[misc]
 
 

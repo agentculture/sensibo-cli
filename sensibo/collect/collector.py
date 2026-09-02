@@ -505,33 +505,36 @@ class Collector:
         for raw_entry in self._load_json(META_HEALTH_OWED, []):
             if not isinstance(raw_entry, Mapping):
                 continue  # unreadable entry: drop it rather than retry forever
-            entry = dict(raw_entry)
-            payload = _payload_from_dict(entry.get("payload"))
-            if payload is None:
-                continue  # unreadable entry: drop it rather than retry forever
-            kind = str(entry.get("kind", ""))
-            location_id = entry.get("location_id")
-            attempts = _int_or_zero(entry.get("attempts")) + 1
-            succeeded, failed = self._deliver(
-                payload, kind, location_id, wall, only=entry.get("transports") or None
-            )
-            if succeeded:
-                transition_id = entry.get("transition_id")
-                if transition_id is not None:
-                    self._store.mark_transition_notified(int(transition_id), wall)
-            if failed is not None and not failed:
-                continue  # every transport this entry still owed has accepted it
-            if attempts >= MAX_OWED_ATTEMPTS:
-                self._drop_owed(entry, kind, location_id, failed, attempts, wall)
-                continue
-            entry["attempts"] = attempts
-            entry["transports"] = failed
-            remaining.append(entry)
+            still_owed = self._retry_one(dict(raw_entry), wall)
+            if still_owed is not None:
+                remaining.append(still_owed)
         return remaining
+
+    def _retry_one(self, entry: dict[str, Any], wall: float) -> dict[str, Any] | None:
+        """One delivery attempt for one owed entry; the entry back if still owed."""
+        payload = _payload_from_dict(entry.get("payload"))
+        if payload is None:
+            return None  # unreadable entry: drop it rather than retry forever
+        kind = str(entry.get("kind", ""))
+        location_id = entry.get("location_id")
+        attempts = _int_or_zero(entry.get("attempts")) + 1
+        succeeded, failed = self._deliver(
+            payload, kind, location_id, wall, only=entry.get("transports") or None
+        )
+        transition_id = entry.get("transition_id")
+        if succeeded and transition_id is not None:
+            self._store.mark_transition_notified(int(transition_id), wall)
+        if failed is not None and not failed:
+            return None  # every transport this entry still owed has accepted it
+        if attempts >= MAX_OWED_ATTEMPTS:
+            self._drop_owed(kind, location_id, failed, attempts, wall)
+            return None
+        entry["attempts"] = attempts
+        entry["transports"] = failed
+        return entry
 
     def _drop_owed(
         self,
-        entry: Mapping[str, Any],
         kind: str,
         location_id: Any,
         failed: list[str] | None,

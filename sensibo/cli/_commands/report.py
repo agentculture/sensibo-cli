@@ -37,7 +37,7 @@ from sensibo.cli._commands.overview import emit_overview
 from sensibo.cli._errors import EXIT_ENV_ERROR, CliError
 from sensibo.cli._output import emit_result
 from sensibo.health import EXECUTION_LOCAL
-from sensibo.notify import Outcome, redact, render_dry_run, resolve_notify_config
+from sensibo.notify import NotifyConfig, Outcome, redact, render_dry_run, resolve_notify_config
 from sensibo.report import (
     DAILY,
     META_LAST_DAILY,
@@ -72,6 +72,37 @@ def _outcomes_to_list(outcomes: list[Outcome]) -> list[dict[str, object]]:
     return [{"transport": o.transport, "ok": o.ok, "detail": o.detail} for o in outcomes]
 
 
+def _apply_report(
+    kind: str, svg: str, now: float, config: NotifyConfig, target_dir: Path
+) -> tuple[str, list[dict[str, object]], bool]:
+    """Write the report and deliver it; raise when every configured transport failed.
+
+    Q5: a configured transport that failed on every leg must not be reported
+    as success, and the caller must not advance the scheduling meta (so a
+    retry, e.g. via ``sensibo report daily --apply``, is still due). No
+    transport configured at all is not this case — the file on disk is itself
+    the deliverable, the same rule as the daemon's ``run_due_reports`` (Q4).
+    """
+    path = write_report(kind, svg, now, target_dir)
+    outcomes = _outcomes_to_list(deliver_report(kind, path, config, resolve_dashboard_url()))
+    delivered = any(bool(outcome["ok"]) for outcome in outcomes)
+    if config.configured and not delivered:
+        failed = ", ".join(
+            f"{outcome['transport']} ({outcome['detail']})"
+            for outcome in outcomes
+            if not outcome["ok"]
+        )
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message=f"report delivery failed on: {failed}",
+            remediation=(
+                "check SENSIBO_NOTIFY_WEBHOOK / SENSIBO_NOTIFY_SCRIPT and run "
+                "sensibo notify test --apply"
+            ),
+        )
+    return str(path), outcomes, delivered
+
+
 def cmd_report(args: argparse.Namespace, *, kind: str) -> int:
     json_mode = bool(getattr(args, "json", False))
     apply = bool(getattr(args, "apply", False))
@@ -96,33 +127,7 @@ def cmd_report(args: argparse.Namespace, *, kind: str) -> int:
         outcomes: list[dict[str, object]] = []
 
         if apply:
-            path = write_report(kind, svg, now, target_dir)
-            raw_outcomes = deliver_report(kind, path, config, resolve_dashboard_url())
-            outcomes = _outcomes_to_list(raw_outcomes)
-            delivered = any(bool(outcome["ok"]) for outcome in outcomes)
-            written_to = str(path)
-
-            # Q5: a configured transport that failed on every leg must not
-            # be reported as success, and must not advance the scheduling
-            # meta (so a retry, e.g. via `sensibo report daily --apply`, is
-            # still due). No transport configured at all is not this case —
-            # the file on disk written above is itself the deliverable, same
-            # rule as the daemon's run_due_reports (Q4).
-            if config.configured and not delivered:
-                failed = ", ".join(
-                    f"{outcome['transport']} ({outcome['detail']})"
-                    for outcome in outcomes
-                    if not outcome["ok"]
-                )
-                raise CliError(
-                    code=EXIT_ENV_ERROR,
-                    message=f"report delivery failed on: {failed}",
-                    remediation=(
-                        "check SENSIBO_NOTIFY_WEBHOOK / SENSIBO_NOTIFY_SCRIPT and run "
-                        "sensibo notify test --apply"
-                    ),
-                )
-
+            written_to, outcomes, delivered = _apply_report(kind, svg, now, config, target_dir)
             store.set_meta(_KIND_TO_META[kind], repr(now))
         else:
             would_path = target_dir / report_filename(kind, now)
