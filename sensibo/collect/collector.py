@@ -73,31 +73,52 @@ META_HEALTH_EXTRA = "health_state_extra"
 #: inferred from every un-stamped row.
 META_HEALTH_OWED = "health_owed"
 
+#: The poll interval the running daemon persists each cycle, ``repr``-formatted.
+#: ``sensibo doctor``'s ``collector_heartbeat`` check reads it so a deliberately
+#: slow cadence is not mistaken for a dead collector.
+META_COLLECT_INTERVAL = "collect_interval"
+
 #: Hard ceiling on the owed queue, so a long transport outage cannot grow the
 #: meta blob without bound; the oldest entries are dropped first.
 MAX_OWED = 50
+
+#: How many cycles an undelivered notification is retried before it is dropped.
+#: There is deliberately **no exponential backoff**: the daemon's cycle cadence
+#: is already the retry spacing (``MIN_INTERVAL`` is 60s, so 20 attempts is
+#: ~30 minutes at the 90s default), and adding a second timer on top would only
+#: make "when does this alert give up?" harder to reason about. The drop is
+#: recorded as a notification row with a ``dropped after N attempts`` outcome,
+#: so a debt that expired is visible rather than silent.
+MAX_OWED_ATTEMPTS = 20
 
 #: A no-op logger; the CLI passes one that writes to stderr.
 Logger = Callable[[str], None]
 
 #: A notify transport: takes a payload, returns one outcome per transport.
-#: Injectable so tests never resolve the operator's real notify config.
-Notifier = Callable[[Payload], Sequence[Any]]
+#: Injectable so tests never resolve the operator's real notify config. It is
+#: called with a second positional argument — a list of transport names — only
+#: when a *partial* redelivery is being retried, so a one-argument callable
+#: remains a valid notifier for everything else.
+Notifier = Callable[..., Sequence[Any]]
 
 
 def _noop(_message: str) -> None:  # pragma: no cover - trivial default
     return None
 
 
-def default_notifier(payload: Payload) -> Sequence[Any]:
+def default_notifier(payload: Payload, only: Sequence[str] | None = None) -> Sequence[Any]:
     """Deliver through :mod:`sensibo.notify` with the operator's resolved config.
 
     Resolved per call rather than cached, so an operator can add a webhook to
     ``~/.sensibo/.env`` without restarting the daemon. :func:`sensibo.notify.send`
     never raises — a flaky webhook must not take down the cycle that detected
     the outage.
+
+    ``only`` restricts the retry to the transports that still owe delivery, so
+    a webhook that already accepted an alert is not spammed while the operator
+    script is being retried.
     """
-    return send(payload, resolve_notify_config())
+    return send(payload, resolve_notify_config(), only)
 
 
 @dataclass(frozen=True)
@@ -214,7 +235,10 @@ class Collector:
         try:
             snapshot = self._client.fleet_snapshot()
         except ApiError as err:
-            self._finish_cycle(wall, ok=False, error=str(err), observations=())
+            # Scrub BEFORE the evaluator sees it: this string is quoted verbatim
+            # into the outbound collector_unhealthy notification, and a Sensibo
+            # URL carries the API key as a query parameter.
+            self._finish_cycle(wall, ok=False, error=scrub_text(str(err)), observations=())
             raise
         pods = _extract_pods(snapshot)
 
@@ -359,8 +383,22 @@ class Collector:
         error: str | None,
         observations: Sequence[Observation],
     ) -> tuple[EvaluationResult, int]:
-        """Run the health engine for this cycle and persist everything it says."""
-        self._retry_owed(wall)
+        """Run the health engine for this cycle and persist everything it says.
+
+        The order here is the crash-safety contract. Retry the standing debt,
+        judge the cycle, then commit — in **one** store transaction — the new
+        health rows, this cycle's transitions, the cycle meta, and the
+        owed-notification queue holding *every* alert this cycle wants to send.
+        Only after that commit is a transport touched, and a delivery that
+        succeeds clears its own debt.
+
+        Committing the health state first (as this used to) loses alerts: the
+        state says "down", so the next cycle sees no edge and never re-announces
+        it, while the transition row and its debt died with the process. Now a
+        process exit anywhere after the commit leaves the alert owed, and the
+        next cycle's :meth:`_retry_owed` delivers it.
+        """
+        carried = self._retry_owed(wall)
         previous = self.load_health_states()
         evaluation = evaluate(
             previous,
@@ -370,12 +408,52 @@ class Collector:
             self._health_config,
             self._collector_previous_ok(),
         )
-        self._persist_states(evaluation.states)
         reason = scrub_text(error or "the fleet snapshot failed")
-        self._store.set_meta(META_LAST_CYCLE_AT, repr(wall))
-        self._store.set_meta(META_LAST_CYCLE_OUTCOME, "ok" if ok else f"failed: {reason}")
-        self._store.set_meta(META_COLLECTOR_OK, "1" if evaluation.collector_ok else "0")
-        sent = self._dispatch(evaluation, wall)
+        meta = {
+            META_HEALTH_EXTRA: json.dumps(_health_extras(evaluation.states), sort_keys=True),
+            META_LAST_CYCLE_AT: repr(wall),
+            META_LAST_CYCLE_OUTCOME: "ok" if ok else f"failed: {reason}",
+            META_COLLECTOR_OK: "1" if evaluation.collector_ok else "0",
+        }
+
+        pending: list[dict[str, Any]] = []
+
+        def _owed_meta(transition_ids: list[int]) -> dict[str, str]:
+            by_location = {
+                transition.location_id: transition_id
+                for transition, transition_id in zip(evaluation.transitions, transition_ids)
+            }
+            for note in evaluation.notifications:
+                payload = _payload_for(note, evaluation.states.get(note.location_id or ""))
+                pending.append(
+                    {
+                        "kind": note.kind,
+                        "location_id": note.location_id,
+                        "transition_id": (
+                            by_location.get(note.location_id)
+                            if note.location_id is not None
+                            else None
+                        ),
+                        "payload": _payload_dict(payload),
+                        "attempts": 0,
+                        "transports": None,
+                    }
+                )
+            return {META_HEALTH_OWED: _dump_owed(carried + pending)}
+
+        self._store.persist_health_cycle(
+            health_rows=[
+                (state.location_id, state.status, state.since, state.last_ok, state.parent_pod_id)
+                for state in evaluation.states.values()
+            ],
+            transitions=[
+                (t.location_id, t.from_status, t.to_status, t.at) for t in evaluation.transitions
+            ],
+            meta=meta,
+            meta_from_transitions=_owed_meta,
+        )
+
+        sent = self._dispatch(pending, carried, wall)
         return evaluation, sent
 
     def _collector_previous_ok(self) -> bool | None:
@@ -384,90 +462,115 @@ class Collector:
             return None
         return raw == "1"
 
-    def _persist_states(self, states: Mapping[str, HealthState]) -> None:
-        extras: dict[str, dict[str, Any]] = {}
-        for location_id, state in states.items():
-            self._store.set_health(
-                location_id,
-                status=state.status,
-                since=state.since,
-                last_ok=state.last_ok,
-                parent_pod_id=state.parent_pod_id,
-            )
-            extras[location_id] = {
-                "ok_streak": state.ok_streak,
-                "last_notified_at": state.last_notified_at,
-                "notifications_today": state.notifications_today,
-                "day_key": state.day_key,
-                "announced_down_since": state.announced_down_since,
-            }
-        self._store.set_meta(META_HEALTH_EXTRA, json.dumps(extras, sort_keys=True))
+    def _dispatch(
+        self, pending: Sequence[dict[str, Any]], carried: Sequence[dict[str, Any]], wall: float
+    ) -> int:
+        """Try to deliver this cycle's already-persisted notifications.
 
-    def _dispatch(self, evaluation: EvaluationResult, wall: float) -> int:
-        """Persist every transition, then try to deliver every notification.
-
-        Order matters: the transition row exists *before* its alert is
-        attempted, so a crash between the two leaves an owed transition rather
-        than an alert nobody can trace. ``notified_at`` is stamped only once a
-        transport actually accepted the message.
+        Every entry in ``pending`` is on disk as owed before this runs, so the
+        only thing left to persist is the *reduction* of that debt. A transport
+        that accepted the message stamps ``notified_at``; a transport that did
+        not keeps its own debt (``transports``), so a webhook success does not
+        cancel a script failure.
         """
-        transition_ids: dict[str, int] = {}
-        for transition in evaluation.transitions:
-            transition_ids[transition.location_id] = self._store.record_transition(
-                transition.location_id,
-                transition.from_status,
-                transition.to_status,
-                transition.at,
-            )
-
         sent = 0
-        owed = self._load_json(META_HEALTH_OWED, [])
-        for note in evaluation.notifications:
-            payload = _payload_for(note, evaluation.states.get(note.location_id or ""))
-            transition_id = (
-                transition_ids.get(note.location_id) if note.location_id is not None else None
-            )
-            if self._deliver(payload, note.kind, note.location_id, wall):
+        surviving: list[dict[str, Any]] = []
+        for entry in pending:
+            payload = _payload_from_dict(entry["payload"])
+            if payload is None:  # pragma: no cover - we just built this dict
+                continue
+            succeeded, failed = self._deliver(payload, entry["kind"], entry["location_id"], wall)
+            if succeeded:
                 sent += 1
-                if transition_id is not None:
-                    self._store.mark_transition_notified(transition_id, wall)
-            else:
-                owed.append(
-                    {
-                        "kind": note.kind,
-                        "location_id": note.location_id,
-                        "transition_id": transition_id,
-                        "payload": _payload_dict(payload),
-                    }
-                )
-        self._save_owed(owed)
+                if entry["transition_id"] is not None:
+                    self._store.mark_transition_notified(int(entry["transition_id"]), wall)
+            if failed is None or failed:
+                entry["attempts"] = 1
+                entry["transports"] = failed
+                surviving.append(entry)
+        self._save_owed(list(carried) + surviving)
         return sent
 
-    def _retry_owed(self, wall: float) -> int:
-        """Retry undelivered notifications once, before this cycle is judged."""
-        owed = self._load_json(META_HEALTH_OWED, [])
-        if not owed:
-            return 0
+    def _retry_owed(self, wall: float) -> list[dict[str, Any]]:
+        """Retry the standing notification debt once; return what is still owed.
+
+        One attempt per cycle, with no backoff schedule of its own: the daemon's
+        cadence (``MIN_INTERVAL`` is 60s) already spaces the retries, so a second
+        timer would only obscure when an alert gives up. After
+        :data:`MAX_OWED_ATTEMPTS` cycles the entry is dropped — logged once
+        (redacted) and recorded as a notification row — rather than retried
+        forever.
+        """
         remaining: list[dict[str, Any]] = []
-        delivered = 0
-        for entry in owed:
+        for raw_entry in self._load_json(META_HEALTH_OWED, []):
+            if not isinstance(raw_entry, Mapping):
+                continue  # unreadable entry: drop it rather than retry forever
+            entry = dict(raw_entry)
             payload = _payload_from_dict(entry.get("payload"))
             if payload is None:
                 continue  # unreadable entry: drop it rather than retry forever
-            if self._deliver(payload, entry.get("kind", ""), entry.get("location_id"), wall):
-                delivered += 1
+            kind = str(entry.get("kind", ""))
+            location_id = entry.get("location_id")
+            attempts = _int_or_zero(entry.get("attempts")) + 1
+            succeeded, failed = self._deliver(
+                payload, kind, location_id, wall, only=entry.get("transports") or None
+            )
+            if succeeded:
                 transition_id = entry.get("transition_id")
                 if transition_id is not None:
                     self._store.mark_transition_notified(int(transition_id), wall)
-            else:
-                remaining.append(entry)
-        self._save_owed(remaining)
-        return delivered
+            if failed is not None and not failed:
+                continue  # every transport this entry still owed has accepted it
+            if attempts >= MAX_OWED_ATTEMPTS:
+                self._drop_owed(entry, kind, location_id, failed, attempts, wall)
+                continue
+            entry["attempts"] = attempts
+            entry["transports"] = failed
+            remaining.append(entry)
+        return remaining
 
-    def _deliver(self, payload: Payload, kind: str, location_id: str | None, wall: float) -> bool:
-        """Hand one payload to the transport; record every attempt's outcome."""
+    def _drop_owed(
+        self,
+        entry: Mapping[str, Any],
+        kind: str,
+        location_id: Any,
+        failed: list[str] | None,
+        attempts: int,
+        wall: float,
+    ) -> None:
+        """Give up on one owed notification: log it once and record the give-up."""
+        transports = ",".join(failed) if failed else "unknown"
+        self._log(
+            scrub_text(
+                f"collect: giving up on an undelivered {kind} notification for "
+                f"{location_id or 'collector'} via {transports} after {attempts} attempts"
+            )
+        )
+        self._store.record_notification(
+            kind=kind,
+            location_id=location_id,
+            sent_at=wall,
+            transport=transports,
+            outcome=f"dropped after {attempts} attempts",
+        )
+
+    def _deliver(
+        self,
+        payload: Payload,
+        kind: str,
+        location_id: str | None,
+        wall: float,
+        only: Sequence[str] | None = None,
+    ) -> tuple[bool, list[str] | None]:
+        """Hand one payload to the transport; record every attempt's outcome.
+
+        Returns ``(any transport accepted it, the transports that did not)``.
+        The second element is ``None`` for "we cannot tell which legs failed —
+        retry them all", ``[]`` for "nothing is still owed", and otherwise the
+        named transports that still owe delivery.
+        """
         try:
-            outcomes = self._notifier(payload)
+            outcomes = self._notifier(payload) if only is None else self._notifier(payload, only)
         except Exception as exc:  # pragma: no cover - a transport must not raise
             self._store.record_notification(
                 kind=kind,
@@ -476,19 +579,24 @@ class Collector:
                 transport="unknown",
                 outcome=f"failed: {scrub_text(str(exc))}",
             )
-            return False
+            return False, (list(only) if only else None)
         succeeded = False
+        failed: list[str] = []
         for outcome in outcomes or ():
             ok = bool(getattr(outcome, "ok", False))
-            succeeded = succeeded or ok
+            transport = str(getattr(outcome, "transport", "unknown"))
+            if ok:
+                succeeded = True
+            else:
+                failed.append(transport)
             self._store.record_notification(
                 kind=kind,
                 location_id=location_id,
                 sent_at=wall,
-                transport=str(getattr(outcome, "transport", "unknown")),
+                transport=transport,
                 outcome=("delivered" if ok else f"failed: {getattr(outcome, 'detail', 'unknown')}"),
             )
-        return succeeded
+        return succeeded, failed
 
     def _load_json(self, key: str, default: Any) -> Any:
         raw = self._store.get_meta(key)
@@ -500,8 +608,7 @@ class Collector:
             return default
 
     def _save_owed(self, owed: Sequence[Any]) -> None:
-        trimmed = list(owed)[-MAX_OWED:]
-        self._store.set_meta(META_HEALTH_OWED, json.dumps(trimmed, sort_keys=True))
+        self._store.set_meta(META_HEALTH_OWED, _dump_owed(owed))
 
     # -- first-run backfill -----------------------------------------------
 
@@ -676,6 +783,32 @@ def _payload_for(note: Notification, state: HealthState | None) -> Payload:
         message=note.message,
         execution=note.execution,
     )
+
+
+def _health_extras(states: Mapping[str, HealthState]) -> dict[str, dict[str, Any]]:
+    """The HealthState fields the ``health`` table has no column for."""
+    return {
+        location_id: {
+            "ok_streak": state.ok_streak,
+            "last_notified_at": state.last_notified_at,
+            "notifications_today": state.notifications_today,
+            "day_key": state.day_key,
+            "announced_down_since": state.announced_down_since,
+        }
+        for location_id, state in states.items()
+    }
+
+
+def _dump_owed(owed: Sequence[Any]) -> str:
+    """Serialise the owed queue, oldest entries dropped past :data:`MAX_OWED`."""
+    return json.dumps(list(owed)[-MAX_OWED:], sort_keys=True)
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):  # pragma: no cover - a corrupt entry
+        return 0
 
 
 def _payload_dict(payload: Payload) -> dict[str, str]:

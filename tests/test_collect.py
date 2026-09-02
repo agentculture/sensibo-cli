@@ -34,6 +34,7 @@ from sensibo.collect import (
     DEFAULT_INTERVAL,
     META_BACKFILL_DONE,
     META_BACKFILL_WINDOW,
+    META_COLLECT_INTERVAL,
     MIN_INTERVAL,
     BackfillResult,
     Collector,
@@ -426,7 +427,7 @@ def test_collect_once_runs_backfill_only_on_first_run(tmp_path) -> None:
 # --- CLI wiring -----------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def patched_client(monkeypatch):
     """Install a fake client factory; return a setter the test calls with data."""
     holder: dict[str, _FakeClient] = {}
@@ -515,6 +516,25 @@ def test_collect_daemon_handles_keyboard_interrupt_cleanly(
     assert fake.fleet_calls == 1  # ran one cycle, then Ctrl-C during the sleep
     assert "Traceback" not in captured.err
     assert "stop" in captured.err.lower()
+
+
+def test_collect_daemon_publishes_its_interval_for_the_heartbeat_check(
+    patched_client, monkeypatch, capsys, tmp_path
+) -> None:
+    """Qodo 14: doctor cannot judge freshness without the daemon's own cadence."""
+    patched_client(_FakeClient(_snapshot(_airpro_pod()), history_fn=_gated_until(1)))
+
+    def _interrupt(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(collect_cmd, "_sleep", _interrupt)
+
+    db = tmp_path / "s.db"
+    assert main(["collect", "--daemon", "--interval", "600", "--db", str(db), "--json"]) == 0
+    capsys.readouterr()
+
+    with Store(db_path=db) as store:
+        assert store.get_meta(META_COLLECT_INTERVAL) == repr(600.0)
 
 
 def test_collect_maps_api_error_to_clean_cli_error(monkeypatch, capsys, tmp_path) -> None:

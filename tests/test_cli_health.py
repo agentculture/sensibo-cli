@@ -233,6 +233,42 @@ def test_doctor_reports_stale_heartbeat_unhealthy(
     assert heartbeat["passed"] is False
 
 
+def test_doctor_judges_the_heartbeat_against_the_daemons_configured_interval(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Qodo 14: a 10-minute cadence must not read as a dead collector.
+
+    The same 1000s-old heartbeat is healthy when the daemon published
+    ``collect_interval=600`` (3x600 = 1800s of slack) and unhealthy under the
+    90s default (3x90 = 270s).
+    """
+    beat_at = time.time() - 1000
+
+    slow = tmp_path / "slow.db"
+    with Store(db_path=slow) as store:
+        store.set_meta("last_cycle_at", str(beat_at))
+        store.set_meta("last_cycle_outcome", "ok")
+        store.set_meta("collect_interval", repr(600.0))
+    main(["doctor", "--db", str(slow), "--json"])
+    heartbeat = _heartbeat_check(capsys)
+    assert heartbeat["passed"] is True
+    assert "interval=600s" in heartbeat["message"]
+
+    default = tmp_path / "default.db"
+    with Store(db_path=default) as store:
+        store.set_meta("last_cycle_at", str(beat_at))
+        store.set_meta("last_cycle_outcome", "ok")
+    main(["doctor", "--db", str(default), "--json"])
+    heartbeat = _heartbeat_check(capsys)
+    assert heartbeat["passed"] is False
+    assert "interval=90s" in heartbeat["message"]
+
+
+def _heartbeat_check(capsys: pytest.CaptureFixture[str]) -> dict:
+    payload = json.loads(capsys.readouterr().out)
+    return {c["id"]: c for c in payload["checks"]}["collector_heartbeat"]
+
+
 def test_doctor_still_healthy_via_sensibo_db_env_with_no_heartbeat(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

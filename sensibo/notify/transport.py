@@ -25,6 +25,7 @@ import os
 import subprocess
 import urllib.error
 import urllib.request
+from collections.abc import Collection
 from dataclasses import asdict, dataclass
 
 from sensibo.health import EXECUTION_LOCAL
@@ -153,8 +154,16 @@ def _send_script(payload: Payload, config: NotifyConfig) -> Outcome:
     return Outcome(TRANSPORT_SCRIPT, True, "delivered")
 
 
-def send(payload: Payload, config: NotifyConfig) -> list[Outcome]:
+def send(
+    payload: Payload,
+    config: NotifyConfig,
+    only: Collection[str] | None = None,
+) -> list[Outcome]:
     """Deliver ``payload`` to every configured transport; one :class:`Outcome` each.
+
+    ``only``, when given, restricts delivery to the named transports (e.g.
+    ``["script"]`` to retry just the leg that failed last time, without
+    re-delivering to the one that already succeeded).
 
     With neither transport configured, returns
     ``[Outcome('none', False, 'not configured')]``. Never raises: webhook HTTP
@@ -165,7 +174,7 @@ def send(payload: Payload, config: NotifyConfig) -> list[Outcome]:
         return [Outcome(TRANSPORT_NONE, False, "not configured")]
 
     outcomes: list[Outcome] = []
-    if config.webhook_url:
+    if config.webhook_url and (only is None or TRANSPORT_WEBHOOK in only):
         try:
             outcomes.append(_send_webhook(payload, config))
         except Exception as err:  # noqa: BLE001 - send() never raises by contract;
@@ -175,13 +184,15 @@ def send(payload: Payload, config: NotifyConfig) -> list[Outcome]:
             outcomes.append(
                 Outcome(TRANSPORT_WEBHOOK, False, redact(f"unexpected error: {err}", config))
             )
-    if config.script_path:
+    if config.script_path and (only is None or TRANSPORT_SCRIPT in only):
         try:
             outcomes.append(_send_script(payload, config))
         except Exception as err:  # noqa: BLE001 - send() never raises; see above.
             outcomes.append(
                 Outcome(TRANSPORT_SCRIPT, False, redact(f"unexpected error: {err}", config))
             )
+    if not outcomes:
+        return [Outcome(TRANSPORT_NONE, False, "no matching transport configured")]
     return outcomes
 
 
