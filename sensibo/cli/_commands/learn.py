@@ -48,7 +48,11 @@ polled from Sensibo's cloud and persisted locally. "Locally" means the data
 comes to rest on your machine, not that the transport avoids the internet.
 
 STATUS: all three pillars are shipped, plus the integration surfaces
-(Python import, MCP, LAN web dashboard).
+(Python import, MCP, LAN web dashboard), plus sensor health tracking
+(`query health`) and test notifications (`notify test`) — both carry the
+local-execution marker `execution: local (stops when this daemon stops)`:
+health tracking and alerting only run while `sensibo collect` is running,
+unlike Sensibo's own cloud automation.
 
 Commands
 --------
@@ -96,7 +100,9 @@ def _as_json_payload() -> dict[str, object]:
         "status": (
             "all three pillars are shipped (control, collection, automation), plus the "
             "integration surfaces: Python import, MCP (sensibo-cli[mcp] extra), and the "
-            "LAN web dashboard"
+            "LAN web dashboard; plus sensor health tracking ('query health') and test "
+            "notifications ('notify test') — both carry execution: local (stops when this "
+            "daemon stops)"
         ),
         "commands": [{"path": list(path), "summary": SUMMARIES[path]} for path in COMMAND_ORDER],
         "exit_codes": {

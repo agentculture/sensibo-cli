@@ -69,6 +69,7 @@ def _build_parser() -> argparse.ArgumentParser:
     from sensibo.cli._commands import explain as _explain_cmd
     from sensibo.cli._commands import learn as _learn_cmd
     from sensibo.cli._commands import mcp as _mcp_group
+    from sensibo.cli._commands import notify as _notify_group
     from sensibo.cli._commands import overview as _overview_cmd
     from sensibo.cli._commands import query as _query_group
     from sensibo.cli._commands import read as _read_cmd
@@ -112,6 +113,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _cli_group.register(sub)
     _devices_cmd.register(sub)
     _mcp_group.register(sub)
+    _notify_group.register(sub)
     _query_group.register(sub)
     _read_cmd.register(sub)
     _room_group.register(sub)
