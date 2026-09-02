@@ -139,7 +139,8 @@ def test_payload_defaults_execution_to_the_local_marker() -> None:
 def test_payload_to_json_is_compact_and_carries_all_fields() -> None:
     payload = _payload()
     body = payload.to_json()
-    assert ", " not in body and ": " not in body
+    assert ", " not in body
+    assert ": " not in body
     parsed = json.loads(body)
     assert parsed["kind"] == "sensor_down"
     assert parsed["location"] == "ms_o7dH4GeY"
@@ -204,6 +205,21 @@ def test_webhook_network_error_returns_failed_outcome_without_raising(
     ]
 
 
+def test_webhook_malformed_url_returns_failed_outcome_without_raising() -> None:
+    """A malformed URL makes ``urllib.request.Request`` itself raise ``ValueError``.
+
+    Q6: that setup error must not escape ``send()`` — it must become a failed
+    webhook :class:`Outcome`, same as an HTTP or network failure.
+    """
+    config = resolve_notify_config(env={WEBHOOK_VAR: "::not a url::"}, home="/nonexistent-home")
+
+    outcomes = send(_payload(), config)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].transport == TRANSPORT_WEBHOOK
+    assert outcomes[0].ok is False
+
+
 # --- script delivery ------------------------------------------------------------
 
 
@@ -255,6 +271,19 @@ def test_script_nonzero_exit_returns_failed_outcome(tmp_path: Path) -> None:
     outcomes = send(_payload(), config)
 
     assert outcomes == [Outcome(TRANSPORT_SCRIPT, False, "exit code 3")]
+
+
+def test_script_missing_file_returns_failed_outcome_without_raising(tmp_path: Path) -> None:
+    """A script path that does not exist makes ``subprocess.run`` raise ``OSError``
+    (``FileNotFoundError``). Q6: that setup error must not escape ``send()``."""
+    missing = tmp_path / "does-not-exist.sh"
+    config = resolve_notify_config(env={SCRIPT_VAR: str(missing)}, home="/nonexistent-home")
+
+    outcomes = send(_payload(), config)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].transport == TRANSPORT_SCRIPT
+    assert outcomes[0].ok is False
 
 
 def test_script_timeout_returns_failed_outcome(tmp_path: Path) -> None:

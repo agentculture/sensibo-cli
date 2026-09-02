@@ -136,6 +136,47 @@ def evaluate(
 # --- the collector-failure branch ------------------------------------------
 
 
+def _carry_forward(prior: HealthState | None) -> dict[str, object]:
+    """The cooldown/daily-cap/announcement memory, unchanged from ``prior``.
+
+    Shared by both branches that build a :class:`HealthState` without
+    themselves deciding anything about notification bookkeeping: the
+    collector-failure path (:func:`_mark_all_unknown`) and the per-location
+    settle path (:func:`_settle`).
+    """
+    return {
+        "last_notified_at": prior.last_notified_at if prior is not None else None,
+        "notifications_today": prior.notifications_today if prior is not None else 0,
+        "day_key": prior.day_key if prior is not None else None,
+        "announced_down_since": prior.announced_down_since if prior is not None else None,
+    }
+
+
+def _transition(
+    location_id: str, prior: HealthState | None, to_status: str, now: float
+) -> Transition:
+    """Build the :class:`Transition` for a location settling on ``to_status``."""
+    return Transition(
+        location_id=location_id,
+        from_status=prior.status if prior is not None else None,
+        to_status=to_status,
+        at=now,
+    )
+
+
+def _parent_for_unknown(observation: Observation | None, prior: HealthState | None) -> str | None:
+    """The parent pod id to carry while a location is forced ``unknown``.
+
+    Prefers this cycle's observation; falls back to what was already
+    persisted so a pod that dropped out of the snapshot doesn't lose its
+    children's lineage.
+    """
+    parent = observation.parent_pod_id if observation is not None else None
+    if parent is None and prior is not None:
+        parent = prior.parent_pod_id
+    return parent
+
+
 def _mark_all_unknown(
     states: dict[str, HealthState],
     seen: Mapping[str, Observation],
@@ -147,30 +188,17 @@ def _mark_all_unknown(
     for location_id in order:
         prior = states.get(location_id)
         observation = seen.get(location_id)
-        parent = observation.parent_pod_id if observation is not None else None
-        if parent is None and prior is not None:
-            parent = prior.parent_pod_id
         changed = prior is None or prior.status != STATUS_UNKNOWN
         if changed:
-            transitions.append(
-                Transition(
-                    location_id=location_id,
-                    from_status=prior.status if prior is not None else None,
-                    to_status=STATUS_UNKNOWN,
-                    at=now,
-                )
-            )
+            transitions.append(_transition(location_id, prior, STATUS_UNKNOWN, now))
         states[location_id] = HealthState(
             location_id=location_id,
             status=STATUS_UNKNOWN,
             since=now if changed else prior.since,
             last_ok=prior.last_ok if prior is not None else None,
-            parent_pod_id=parent,
+            parent_pod_id=_parent_for_unknown(observation, prior),
             ok_streak=0,
-            last_notified_at=prior.last_notified_at if prior is not None else None,
-            notifications_today=prior.notifications_today if prior is not None else 0,
-            day_key=prior.day_key if prior is not None else None,
-            announced_down_since=prior.announced_down_since if prior is not None else None,
+            **_carry_forward(prior),
         )
 
 
@@ -240,6 +268,55 @@ def _parent_status(
     return raw.get(parent_pod_id)
 
 
+def _status_for_reporting(
+    prior: HealthState | None, config: HealthConfig
+) -> tuple[str, int, str | None]:
+    """The status/streak/candidate when this cycle's own evidence is ``ok``.
+
+    Split out of :func:`_status_for` purely to keep each function's branching
+    small: this is the recovery-hold half of the judgement.
+    """
+    streak = (prior.ok_streak + 1) if prior is not None else 1
+    if prior is None or prior.status == STATUS_OK:
+        return STATUS_OK, streak, None
+    if streak >= config.recovery_hold_cycles:
+        # Closes an announced outage — even one that passed through
+        # ``unknown`` while the collector itself was failing.
+        candidate = NOTIFY_RECOVERED if prior.announced_down_since is not None else None
+        return STATUS_OK, streak, candidate
+    # Reporting again, but the hold is not satisfied: hold the line.
+    return prior.status, streak, None
+
+
+def _status_for(
+    raw_status: str,
+    parent_status: str | None,
+    prior: HealthState | None,
+    config: HealthConfig,
+) -> tuple[str, int, str | None]:
+    """The new status, ``ok_streak``, and a maybe-notify candidate.
+
+    Pure judgement, no :class:`HealthState`/:class:`Transition` construction —
+    that split is what keeps this and :func:`_settle` each under the
+    complexity gate.
+    """
+    if parent_status == STATUS_DOWN:
+        return STATUS_UNKNOWN_PARENT_DOWN, 0, None
+    if raw_status == STATUS_DOWN:
+        candidate = NOTIFY_DOWN if (prior is None or prior.status != STATUS_DOWN) else None
+        return STATUS_DOWN, 0, candidate
+    return _status_for_reporting(prior, config)
+
+
+def _last_ok_for(prior: HealthState | None, raw_status: str, now: float) -> float | None:
+    """The carried-forward ``last_ok`` instant, given this cycle's raw evidence."""
+    if raw_status == STATUS_OK:
+        return now
+    if prior is not None:
+        return prior.last_ok
+    return None
+
+
 def _settle(
     prior: HealthState | None,
     observation: Observation,
@@ -249,52 +326,18 @@ def _settle(
     config: HealthConfig,
 ) -> tuple[HealthState, Transition | None, str | None]:
     """Fold one observation into a state, a maybe-transition, a maybe-alert."""
-    candidate: str | None = None
-
-    if parent_status == STATUS_DOWN:
-        status = STATUS_UNKNOWN_PARENT_DOWN
-        streak = 0
-    elif raw_status == STATUS_DOWN:
-        status = STATUS_DOWN
-        streak = 0
-        if prior is None or prior.status != STATUS_DOWN:
-            candidate = NOTIFY_DOWN
-    else:
-        streak = (prior.ok_streak + 1) if prior is not None else 1
-        if prior is None or prior.status == STATUS_OK:
-            status = STATUS_OK
-        elif streak >= config.recovery_hold_cycles:
-            status = STATUS_OK
-            if prior.announced_down_since is not None:
-                # Closes an announced outage — even one that passed through
-                # ``unknown`` while the collector itself was failing.
-                candidate = NOTIFY_RECOVERED
-        else:
-            # Reporting again, but the hold is not satisfied: hold the line.
-            status = prior.status
+    status, streak, candidate = _status_for(raw_status, parent_status, prior, config)
 
     changed = prior is None or prior.status != status
-    transition = (
-        Transition(
-            location_id=observation.location_id,
-            from_status=prior.status if prior is not None else None,
-            to_status=status,
-            at=now,
-        )
-        if changed
-        else None
-    )
+    transition = _transition(observation.location_id, prior, status, now) if changed else None
     state = HealthState(
         location_id=observation.location_id,
         status=status,
         since=now if changed else prior.since,
-        last_ok=now if raw_status == STATUS_OK else (prior.last_ok if prior is not None else None),
+        last_ok=_last_ok_for(prior, raw_status, now),
         parent_pod_id=observation.parent_pod_id,
         ok_streak=streak,
-        last_notified_at=prior.last_notified_at if prior is not None else None,
-        notifications_today=prior.notifications_today if prior is not None else 0,
-        day_key=prior.day_key if prior is not None else None,
-        announced_down_since=prior.announced_down_since if prior is not None else None,
+        **_carry_forward(prior),
     )
     return state, transition, candidate
 

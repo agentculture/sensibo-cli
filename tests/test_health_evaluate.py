@@ -147,12 +147,39 @@ def test_config_defaults_and_from_env() -> None:
 
 
 def test_config_rejects_nonsense_env_values() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="must be a number"):
         HealthConfig.from_env({"SENSIBO_HEALTH_DOWN_AFTER": "soon"})
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="must not be negative"):
         HealthConfig.from_env({"SENSIBO_HEALTH_DOWN_AFTER": "-1"})
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="must not be negative"):
         HealthConfig(daily_cap=-2)
+
+
+# --- Q13: nonfinite thresholds must not silently disable alerting -----------
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf"])
+def test_from_env_rejects_nonfinite_down_after(raw: str) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        HealthConfig.from_env({"SENSIBO_HEALTH_DOWN_AFTER": raw})
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf"])
+def test_from_env_rejects_nonfinite_cooldown(raw: str) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        HealthConfig.from_env({"SENSIBO_HEALTH_COOLDOWN": raw})
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_health_config_rejects_nonfinite_down_after_seconds(value: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        HealthConfig(down_after_seconds=value)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_health_config_rejects_nonfinite_cooldown_seconds(value: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        HealthConfig(cooldown_seconds=value)
 
 
 # --- criterion 2: threshold, isAlive, and the recovery hold -----------------

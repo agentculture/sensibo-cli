@@ -28,7 +28,7 @@ from sensibo.store import (
 # --- fixtures ---------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def store(tmp_path: Path) -> Store:
     s = Store(db_path=tmp_path / "sensibo.db")
     yield s
@@ -529,7 +529,8 @@ def test_record_readings_is_one_transaction_and_record_series_bulk_inserts(tmp_p
     assert written == 6720
     assert elapsed < 2.0, f"record_series took {elapsed:.2f}s"
     rows = store.query_range("pod-1", "co2")
-    assert len(rows) == 6720 and rows[0].unit == "ppm"
+    assert len(rows) == 6720
+    assert rows[0].unit == "ppm"
     # idempotent: re-recording the same points upserts, never duplicates.
     assert store.record_series("pod-1", "co2", points) == 6720
     assert len(store.query_range("pod-1", "co2")) == 6720

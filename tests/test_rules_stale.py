@@ -74,21 +74,26 @@ def test_stale_leaf_accepts_a_positive_after_seconds() -> None:
 
 
 def test_stale_leaf_requires_a_location() -> None:
+    no_location = _rule({"type": "stale"})
     with pytest.raises(RuleValidationError):
-        Rule.from_dict(_rule({"type": "stale"}))
+        Rule.from_dict(no_location)
+
+    blank_location = _rule({"type": "stale", "location": "   "})
     with pytest.raises(RuleValidationError):
-        Rule.from_dict(_rule({"type": "stale", "location": "   "}))
+        Rule.from_dict(blank_location)
 
 
 @pytest.mark.parametrize("bad", [0, -1, 1.5, True, "900", None])
 def test_stale_after_seconds_must_be_a_positive_int(bad: object) -> None:
+    payload = _rule({"type": "stale", "location": "Bedroom", "after_seconds": bad})
     with pytest.raises(RuleValidationError):
-        Rule.from_dict(_rule({"type": "stale", "location": "Bedroom", "after_seconds": bad}))
+        Rule.from_dict(payload)
 
 
 def test_stale_leaf_rejects_unknown_keys() -> None:
+    payload = _rule({"type": "stale", "location": "Bedroom", "field": "motion"})
     with pytest.raises(RuleValidationError) as excinfo:
-        Rule.from_dict(_rule({"type": "stale", "location": "Bedroom", "field": "motion"}))
+        Rule.from_dict(payload)
     assert "field" in str(excinfo.value)
 
 

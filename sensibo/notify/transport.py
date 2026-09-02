@@ -95,13 +95,13 @@ def _open(request: urllib.request.Request, timeout: float):
 
 def _send_webhook(payload: Payload, config: NotifyConfig) -> Outcome:
     url = config.webhook_url or ""
-    request = urllib.request.Request(
-        url,
-        data=payload.to_json().encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
+        request = urllib.request.Request(
+            url,
+            data=payload.to_json().encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         # The URL is operator-configured (an https:// webhook), so scheme auditing
         # is a non-issue here; same pattern as sensibo/api/client.py.
         with _open(request, timeout=config.timeout):  # nosec B310
@@ -110,6 +110,11 @@ def _send_webhook(payload: Payload, config: NotifyConfig) -> Outcome:
         return Outcome(TRANSPORT_WEBHOOK, False, redact(f"HTTP {err.code}", config))
     except urllib.error.URLError as err:
         return Outcome(TRANSPORT_WEBHOOK, False, redact(f"network error: {err.reason}", config))
+    except ValueError as err:
+        # e.g. an unparseable/unknown-scheme webhook URL: Request() itself raises
+        # before any network call is made. A setup error, not a delivery error,
+        # but send() never raises so it becomes a failed Outcome the same way.
+        return Outcome(TRANSPORT_WEBHOOK, False, redact(f"invalid webhook URL: {err}", config))
     return Outcome(TRANSPORT_WEBHOOK, True, "delivered")
 
 
@@ -138,6 +143,11 @@ def _send_script(payload: Payload, config: NotifyConfig) -> Outcome:
         return Outcome(
             TRANSPORT_SCRIPT, False, redact(f"timed out after {config.timeout}s", config)
         )
+    except OSError as err:
+        # A missing or non-executable script (FileNotFoundError, PermissionError,
+        # …) never even spawns; a setup error, not a delivery error, but send()
+        # never raises so it becomes a failed Outcome the same way.
+        return Outcome(TRANSPORT_SCRIPT, False, redact(f"cannot run script: {err}", config))
     if proc.returncode != 0:
         return Outcome(TRANSPORT_SCRIPT, False, redact(f"exit code {proc.returncode}", config))
     return Outcome(TRANSPORT_SCRIPT, True, "delivered")
@@ -156,9 +166,22 @@ def send(payload: Payload, config: NotifyConfig) -> list[Outcome]:
 
     outcomes: list[Outcome] = []
     if config.webhook_url:
-        outcomes.append(_send_webhook(payload, config))
+        try:
+            outcomes.append(_send_webhook(payload, config))
+        except Exception as err:  # noqa: BLE001 - send() never raises by contract;
+            # any error the helper itself didn't already turn into an Outcome
+            # (an unanticipated bug, not a documented failure mode) still must
+            # not escape the collector cycle that calls this.
+            outcomes.append(
+                Outcome(TRANSPORT_WEBHOOK, False, redact(f"unexpected error: {err}", config))
+            )
     if config.script_path:
-        outcomes.append(_send_script(payload, config))
+        try:
+            outcomes.append(_send_script(payload, config))
+        except Exception as err:  # noqa: BLE001 - send() never raises; see above.
+            outcomes.append(
+                Outcome(TRANSPORT_SCRIPT, False, redact(f"unexpected error: {err}", config))
+            )
     return outcomes
 
 

@@ -34,7 +34,7 @@ def _value(field: str, i: int) -> float:
     return base[field] + math.sin(i / 50.0 + len(field)) * 2.0
 
 
-@pytest.fixture()
+@pytest.fixture
 def store(tmp_path: Path) -> Store:
     s = Store(db_path=tmp_path / "t.db")
     # One pod plus two Room Sensors nested under it; a fourth location has
