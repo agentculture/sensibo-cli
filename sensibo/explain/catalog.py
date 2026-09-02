@@ -120,12 +120,19 @@ _DOCTOR = """\
 
 Checks the agent-identity invariants `steward doctor` verifies:
 prompt-file-present and backend-consistency (`colleague` → `AGENTS.colleague.md`), plus a
-skills-present check. Exits 1 when unhealthy.
+skills-present check and a `collector_heartbeat` check (reads the
+`last_cycle_at` / `last_cycle_outcome` meta keys `sensibo collect` writes each
+cycle; unhealthy once the heartbeat is older than 3x the poll interval, or
+absent). Only the identity checks (`prompt_file_present`,
+`backend_consistency`) gate the exit code; `skills_present` and
+`collector_heartbeat` are warnings that report themselves honestly without
+flipping it. Exits 1 when an identity check is unhealthy.
 
 ## Usage
 
     sensibo doctor
     sensibo doctor --json
+    sensibo doctor --db /path/to/sensibo.db
 """
 
 _COLLECT = """\
@@ -228,6 +235,9 @@ pointing at `sensibo collect` — that is the verb that populates what
   both ends.
 - `sensibo query locations` — every known sensing location (pod or Room
   Sensor) with kind, model, room name, alias (if set), and last-seen.
+- `sensibo query health [LOCATION] [--since ISO8601]` — sensor health: current
+  status, since, last_ok, and outage (transition) history. See
+  `sensibo explain query health`.
 
 ## Usage
 
@@ -235,9 +245,77 @@ pointing at `sensibo collect` — that is the verb that populates what
     sensibo query latest pod-abc123 --field temperature
     sensibo query range pod-abc123 --field temperature --since 2026-01-01 --json
     sensibo query locations --json
+    sensibo query health --json
     sensibo query latest --db /path/to/sensibo.db
 """
 
+
+_QUERY_HEALTH = """\
+# sensibo query health [LOCATION]
+
+Sensor health from the local store, **offline only**: current status
+(`ok` / `down` / `unknown` / `unknown_parent_down`), `since` (when it entered
+that status), `last_ok` (last known-good instant, or `never`), the raw
+transition log, and a computed `outages` list — closed `down` -> `ok` pairs
+with `start`, `end`, and `duration_seconds`. All timestamps render as ISO
+8601 UTC. Health rows are written by `sensibo collect`'s per-cycle evaluation
+(see `sensibo/health/`); an empty `health` table means no cycle has run yet,
+same remediation as every other empty-store `query` error.
+
+`LOCATION` (optional) resolves like every other location argument in this
+CLI: stable id, operator alias, or Sensibo room name
+(`sensibo.store.rooms.resolve_location`). Omit it to see every location.
+`--since` narrows the transition log to an inclusive lower bound.
+
+The response also carries `collector: {last_cycle_at, last_cycle_outcome}` —
+the same heartbeat `sensibo doctor`'s `collector_heartbeat` check reads — and
+the local-execution marker (`execution: local (stops when this daemon
+stops)`): health tracking only runs while `sensibo collect` is running.
+
+## Usage
+
+    sensibo query health --json
+    sensibo query health "Living Room"
+    sensibo query health pod-abc123 --since 2026-09-01T00:00:00Z --json
+"""
+
+_NOTIFY = """\
+# sensibo notify
+
+Send (or preview) a test notification through the configured transport(s) —
+`SENSIBO_NOTIFY_WEBHOOK` and/or `SENSIBO_NOTIFY_SCRIPT` (environment, else
+`~/.sensibo/.env`) — the same transports `sensibo collect`'s health alerting
+uses. Lets an operator verify delivery works without waiting for a real
+sensor-down event.
+
+**Dry-run by default**, like every write verb in this project: without
+`--apply`, `notify test` prints the exact redacted payload (`kind: "test"`)
+and the transport(s) it would send to, and calls the transport **zero**
+times. `--apply` sends it — exactly once per configured transport — and
+prints each transport's outcome.
+
+With no transport configured: the dry-run preview says so and exits 0 (there
+is nothing broken, just nothing to test); `--apply` with nothing configured
+is a user error (exit 1) whose remediation names both env vars.
+
+Every response — text and `--json` — carries `execution: local (stops when
+this daemon stops)`: notifications only fire while this machine's collector
+is running, unlike Sensibo's own cloud automation (`smartmode`, `schedule`,
+`timer`).
+
+## Verbs
+
+- `sensibo notify test [--apply]` — preview (default) or send a test
+  notification.
+- `sensibo notify overview` — describe this noun.
+
+## Usage
+
+    sensibo notify test                 # dry-run preview, nothing sent
+    sensibo notify test --json          # dry-run preview, --json
+    sensibo notify test --apply         # sends, exactly once per transport
+    sensibo notify overview --json
+"""
 
 _ROOM = """\
 # sensibo room
@@ -679,6 +757,10 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("query", "latest"): _QUERY,
     ("query", "range"): _QUERY,
     ("query", "locations"): _QUERY,
+    ("query", "health"): _QUERY_HEALTH,
+    ("notify",): _NOTIFY,
+    ("notify", "overview"): _NOTIFY,
+    ("notify", "test"): _NOTIFY,
     ("room",): _ROOM,
     ("room", "overview"): _ROOM,
     ("room", "list"): _ROOM_LIST,
@@ -747,6 +829,7 @@ COMMAND_ORDER: tuple[tuple[str, ...], ...] = (
     ("set",),
     ("collect",),
     ("query",),
+    ("notify",),
     ("room",),
     ("rule",),
     ("smartmode",),
@@ -770,7 +853,8 @@ SUMMARIES: dict[tuple[str, ...], str] = {
     ("read",): "One snapshot of every current reading for a location.",
     ("set",): "Control the AC: dry-run by default, --apply commits.",
     ("collect",): "Poll the fleet on a cadence into the local store.",
-    ("query",): "Offline reads from the local store.",
+    ("query",): "Offline reads from the local store, incl. sensor health.",
+    ("notify",): "Preview or send a test notification (dry-run by default).",
     ("room",): "Name sensing locations; flag stale sensors.",
     ("rule",): "Local rules engine: dry-run before arm, hysteresis.",
     ("smartmode",): "Climate React — runs in Sensibo's cloud.",

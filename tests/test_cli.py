@@ -155,3 +155,46 @@ def test_learn_carries_the_trademark_disclaimer(capsys: pytest.CaptureFixture[st
 def test_learn_does_not_claim_to_be_a_template(capsys: pytest.CaptureFixture[str]) -> None:
     main(["learn"])
     assert "clonable template" not in capsys.readouterr().out
+
+
+# --- t6: query health / notify explain + learn coverage ---------------------
+
+
+def test_explain_query_health(capsys: pytest.CaptureFixture[str]) -> None:
+    rc = main(["explain", "query", "health"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "sensibo query health" in out
+
+
+def test_explain_notify(capsys: pytest.CaptureFixture[str]) -> None:
+    rc = main(["explain", "notify"])
+    assert rc == 0
+    assert "sensibo notify" in capsys.readouterr().out
+
+
+def test_explain_notify_test(capsys: pytest.CaptureFixture[str]) -> None:
+    rc = main(["explain", "notify", "test"])
+    assert rc == 0
+    assert "notify test" in capsys.readouterr().out
+
+
+def test_learn_mentions_health_and_notify_and_local_execution(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    main(["learn"])
+    out = capsys.readouterr().out
+    assert "health" in out.lower()
+    assert "notify" in out.lower()
+    assert "local (stops when this daemon stops)" in out
+
+
+def test_learn_json_mentions_health_and_notify_and_local_execution(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    main(["learn", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    blob = json.dumps(payload).lower()
+    assert "health" in blob
+    assert "notify" in blob
+    assert "local (stops when this daemon stops)" in blob
