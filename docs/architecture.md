@@ -2,8 +2,10 @@
 
 How `sensibo-cli` is put together, and where the Sensibo code will go.
 
-**Current state: scaffold.** Only the agent-first introspection verbs exist. This
-document describes the skeleton that's here and the shape the rest must fit into.
+**Current state: all three pillars are shipped**, plus the integration
+surfaces and the sensor-health/alerting/report layer on top of the store —
+see [`docs/health.md`](health.md). This document describes the skeleton
+those verbs are built on and the shape any new one must fit into.
 
 ## Names
 
@@ -47,6 +49,15 @@ sensibo/
     _errors.py         CliError + the exit-code policy
     _output.py         the stdout/stderr split
     _commands/         one module per verb, each exposing register(sub)
+  health/
+    model.py           pure data model: HealthConfig, statuses, records
+    evaluate.py         the pure evaluator: prior state + observations -> new state
+  notify/
+    transport.py        webhook POST / script hook, redaction, dry-run preview
+  report/
+    chart.py            stdlib SVG multi-series renderer
+    schedule.py          when a daily/weekly report is due
+    deliver.py           where reports land on disk, and telling someone
   explain/
     catalog.py         markdown keyed by command-path tuple
 ```
@@ -118,10 +129,12 @@ AC state, the target state, and the diff — and changes nothing.
   `historicalMeasurements` HTTP 403 is raised as a typed
   `GatedHistoryWindowError`, not a crash — see "History retention" in
   [`sensibo-api.md`](sensibo-api.md).
-- **`sensibo/store/`** — the local time-series store. Not yet written. Must be
-  schema-flexible: sensor sets differ per model, so persist "whatever fields
-  this pod reported", and branch on `productModel` (the `pm25` unit trap in
-  [`sensibo-api.md`](sensibo-api.md) is the reason).
+- **`sensibo/store/`** — the local time-series store. **Implemented.**
+  Schema-flexible: sensor sets differ per model, so it persists "whatever
+  fields this pod reported", and branches on `productModel` (the `pm25` unit
+  trap in [`sensibo-api.md`](sensibo-api.md) is the reason). Schema version 2
+  adds `health`/`transitions`/`notifications` tables alongside the original
+  `locations`/`readings`/`meta` — see [`health.md`](health.md).
 - **`sensibo/rules/`** — the local rules engine. **Implemented.** A rule is
   declarative JSON (a name, a target pod, an `acState` action, and a tree of
   conditions over current store readings — thresholds, time-of-day windows,
@@ -144,6 +157,27 @@ AC state, the target state, and the diff — and changes nothing.
   rules. A shipped example (`examples/cross-room-motion-temp.rule.json`) combines
   motion in one room with temperature in another — something Climate React
   cannot express.
+- **`sensibo/health/`** — pure sensor-health evaluation. **Implemented.**
+  `model.py` holds the frozen data model (`HealthConfig`, the four status
+  values, `Observation`/`HealthState`/`Transition`/`Notification`); a
+  guard test enforces it never imports `sensibo.store`/`sensibo.api`/
+  `sensibo.cli`. `evaluate.py` is one pure function — prior state map +
+  this cycle's observations + collector outcome + now → new state map,
+  transitions, and notifications-to-send — so a daemon restart is just
+  "load the map back and carry on". See [`health.md`](health.md).
+- **`sensibo/notify/`** — notification transport. **Implemented.** A
+  generic webhook POST (`urllib`) and an operator-configured script hook
+  (`subprocess`, no shell, argv list, stdin JSON, secrets stripped from the
+  child env) — no new runtime dependency. `redact()` scrubs the webhook URL
+  out of every log line, `--json` payload, and dry-run preview, mirroring
+  `sensibo/api/_scrub.py`'s treatment of the API key.
+- **`sensibo/report/`** — offline SVG chart reports. **Implemented.**
+  `chart.py` renders a self-contained multi-panel SVG straight from the
+  store (stdlib-only, reusing the web dashboard's even-downsampling
+  approach); `schedule.py` decides when a daily/weekly report is due from a
+  host-local clock and the last-sent instant in `meta`; `deliver.py` writes
+  the file under `~/.sensibo/reports/` and hands a small (never
+  multipart-upload) notification to `sensibo/notify/`.
 
 The key resolves as `SENSIBO_API_KEY` in the environment first, then
 `~/.sensibo/.env` (`sensibo/api/_auth.py`). It is never read from a committed

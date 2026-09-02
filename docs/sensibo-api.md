@@ -179,7 +179,7 @@ Keyed by the `productModel` field:
 | **Air Pro** (`airq`) | + `tvoc` (ppb), `co2` (ppm), `iaq`, `motion`, `roomIsOccupied`, `rssi` | **No PM2.5.** Field set CONFIRMED against the operator's real pod 2026-07-14. |
 | **Elements** (`elements`) | + `pm25` (µg/m³), `tvoc`, `co2`, `etoh`, `iaq` | real particulate sensor |
 | **Pure** (`pure`) | `pm25` — **as an AQI enum, not µg/m³** | no timer, no smartmode |
-| **Room Sensor** | `motion`, temperature, humidity, battery, rssi | **not a pod** — see below |
+| **Room Sensor** | `motion`, temperature, humidity, `batteryVoltage` (mV), rssi | **not a pod** — see below |
 
 ### Trap 1: `pm25` is polymorphic 🚨
 
@@ -200,6 +200,32 @@ It surfaces **nested inside the parent pod** as `motionSensors[]`, and the paren
 gains a `roomIsOccupied` boolean. It does not work with Sky.
 
 Anything that enumerates "devices" by iterating pods will miss every Room Sensor.
+
+### Trap 4: the Room Sensor's battery field is `batteryVoltage`, not `battery` 🚨
+
+**CONFIRMED against the operator's real fleet.** A Room Sensor's `measurements`
+carries `batteryVoltage` in **millivolts**, not a `battery` percentage — an
+earlier version of this doc, and this project's own `sensibo/store/_units.py`,
+both had it wrong as plain `battery`. Both are now corrected (`derive_unit`
+tags `batteryVoltage` as `mV`).
+
+**It is quantized, not linear.** The operator's two Room Sensors sat flat at
+exactly `3000` mV for 14 straight days, then cliffed straight to silence — the
+last values recorded before each sensor went dark were `1638` mV and `1728`
+mV, one per sensor. A voltage-drop warning threshold tuned against a smooth
+discharge curve would likely never fire before the sensor dies; see
+[`docs/health.md`](health.md) for how the health evaluator treats the *outage
+itself* (last-reading-age), not the voltage, as the trustworthy signal.
+
+### Poll cadence: measured, not assumed
+
+**A read-only probe of the operator's live store, run 2026-09-02**, measured
+the inter-reading interval across the pod and both Room Sensors over the
+trailing 14 days: **p50 = p90 = 91s, p99 = 132s**, uniform across the pod and
+both Room Sensor kinds — cadence does not differ by device kind on this
+fleet. This is the empirical basis for the sensor-health evaluator's default
+"down" threshold, `SENSIBO_HEALTH_DOWN_AFTER` = 900s (roughly ten missed
+cycles) — see [`docs/health.md`](health.md).
 
 ### Trap 3: CO2 is derived, not measured
 

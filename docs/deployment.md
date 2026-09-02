@@ -28,11 +28,22 @@ never get back**. The retention pillar is exactly as good as the collector's
 uptime, and a foreground `collect --daemon` in a terminal has the uptime of
 that terminal.
 
-There is a second, sharper reason. `sensibo collect --daemon` is **not
-internally resilient**: an `ApiError` — a cloud 5xx, an exhausted 429 retry, or
-simply the network not being up yet at boot — propagates out of its loop and
-exits the process with code 2 (`sensibo/cli/_commands/collect.py`). Nothing in
-the CLI brings it back. `Restart=always` is the *only* thing that does.
+There is a second, sharper reason, though it is narrower than it used to be.
+`sensibo collect --daemon` used to be **not internally resilient**: an
+`ApiError` — a cloud 5xx, an exhausted 429 retry, or simply the network not
+being up yet at boot — propagated out of its loop and exited the process
+with code 2. Since the sensor-health work (`sensibo/cli/_commands/collect.py`,
+`docs/health.md`), the daemon **survives** an `ApiError`: it records the
+failed cycle, runs the health evaluator (every location goes `unknown`, one
+`collector_unhealthy` notification fires), logs to stderr, and keeps its
+normal interval. `sensibo collect --once` still exits 2 on failure, and
+`Restart=always` still matters — a crash the daemon's own loop can't catch
+(an unhandled exception, an OOM kill) still needs it, and a **permanently bad
+API key now produces a `collector_unhealthy` notification on the configured
+cooldown instead of a fast crash-restart loop**, which reads as `active` in
+`systemctl --user status` even though nothing is actually being collected.
+`sensibo doctor`'s `collector_heartbeat` check (`docs/health.md`, "The
+heartbeat") is how you catch that case.
 
 ## Quickstart
 
@@ -73,6 +84,34 @@ session, and would not come back at boot. With it, systemd starts your user
 manager at boot, no login required. `install` enables it for you (and says so
 in the plan); `status` reports it; `uninstall` deliberately leaves it alone,
 because you may well have enabled it for something else.
+
+## Sensor health, alerts, and reports run inside the same unit
+
+**No new systemd unit is needed for health tracking, alerting, or reports.**
+All three run inside `sensibo-collect.service`: health evaluation happens
+after every poll cycle, and the report scheduler runs in the same daemon
+loop against its own in-daemon clock (`SENSIBO_REPORT_DAILY_AT` /
+`SENSIBO_REPORT_WEEKLY_AT`, default `07:00` host-local — see
+[`docs/health.md`](health.md)). Reports are written to
+`~/.sensibo/reports/` (override with `SENSIBO_REPORTS_DIR`) and served
+read-only by `sensibo-web.service` at `/reports/`.
+
+**Restart order after an upgrade.** The store's schema went from version 1
+to version 2 with this change (new `health`/`transitions`/`notifications`
+tables, a fail-closed version guard — see `docs/health.md`, "Schema v2 and
+the upgrade note"). After upgrading the installed `sensibo-cli` package or
+venv, restart the collector so the running daemon is the v2 binary:
+
+```bash
+systemctl --user restart sensibo-collect.service
+```
+
+Do the same for `sensibo-web.service` if it needs the new health columns on
+the dashboard. Until restarted, an old v1 daemon keeps writing readings
+into the (already-migrated) v2 file without error — the v1 tables are
+unchanged — but produces no health/alert/report data. See `docs/health.md`
+for exactly what a not-yet-restarted v1 binary does and does not do against
+a v2 file.
 
 ## What is deliberately NOT installed
 

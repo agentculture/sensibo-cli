@@ -17,10 +17,18 @@ Three pillars, in build order:
 3. **Automate conditions that drive the AC** — thresholds, schedules,
    occupancy, and multi-room logic.
 
-**Current state: the repo is a scaffold.** The CLI ships only the agent-first
-introspection verbs (`whoami`, `learn`, `explain`, `overview`, `doctor`, `cli
-overview`) inherited from `culture-agent-template`. None of the three pillars
-exist yet.
+**Current state: all three pillars are shipped**, plus the integration
+surfaces (`import sensibo`, an MCP server, a LAN web dashboard) and a fourth
+layer built on top of the retention pillar: **sensor health, alerting, and
+offline chart reports**. `sensibo collect` evaluates every location's health
+after each poll cycle, persists status/transition/notification history in the
+store, and dispatches alerts through a generic webhook or an operator script
+(`sensibo query health`, `sensibo notify test`, `sensibo report daily|weekly`)
+— all dry-run by default, all carrying the same local-execution marker rules
+use. See [`docs/health.md`](docs/health.md) for the full picture: the outage
+classes, thresholds, notification config, report scheduling, the schema v2
+migration, and the local-execution caveat (everything in this layer stops
+when `sensibo-collect.service` stops — there is no cloud fallback).
 
 ## Commands
 

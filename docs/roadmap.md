@@ -89,6 +89,31 @@ compressor unattended, and a restarting rules daemon raises a question a
 restarting poller does not (what happens to a hysteresis window mid-restart?).
 That stays a foreground, explicit decision until it is thought through.
 
+## Answered: sensor health, alerting, reports, and the daemon heartbeat
+
+Three more items this doc used to carry as open (the "daemon must be able to
+tell you when it last ran" line above, and the fact that a dead sensor's
+staleness was only ever a glance-at-the-dashboard flag) are answered in
+[`docs/health.md`](health.md):
+
+- **Sensor health** — every location's status (`ok`/`down`/`unknown`/
+  `unknown_parent_down`), persisted with start/end transitions, queryable
+  offline (`sensibo query health`) and via the MCP `sensibo_health` tool.
+- **Alerting** — a down or recovered sensor, or a failed collector cycle,
+  notifies through a generic webhook or an operator script
+  (`sensibo notify test` to preview or send), debounced with a cooldown and
+  a daily cap.
+- **Reports** — daily and weekly offline SVG charts, rendered from the local
+  store alone and delivered through the same notification transport
+  (`sensibo report daily|weekly`), served read-only from the web dashboard.
+- **The daemon heartbeat** — `sensibo collect` now writes `last_cycle_at` /
+  `last_cycle_outcome` to the store after every cycle; `sensibo doctor`'s
+  `collector_heartbeat` check and `sensibo query health --json`'s
+  `collector` block both read it.
+
+All four run **inside** `sensibo collect` — no new systemd unit — and stop
+the moment that daemon stops, exactly like the local rules engine below.
+
 ## Open questions
 
 Tracked in [`sensibo-api.md`](sensibo-api.md#open-questions-to-settle-against-real-hardware).

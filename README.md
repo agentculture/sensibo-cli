@@ -10,8 +10,11 @@ that drive the AC.
 > **Status: all three pillars shipped** — control (`set`), collection
 > (`collect`/`query`/`room`), and automation (`rule` locally, plus
 > `smartmode`/`schedule`/`timer` in Sensibo's cloud) — with three integration
-> surfaces: `import sensibo`, MCP, and a LAN web dashboard. Acceptance-tested
-> against a real fleet: [docs/walkthrough.md](docs/walkthrough.md).
+> surfaces: `import sensibo`, MCP, and a LAN web dashboard, plus sensor
+> health tracking, alerting, and daily/weekly offline SVG reports
+> (`query health`, `notify`, `report` — see [docs/health.md](docs/health.md)).
+> Acceptance-tested against a real fleet:
+> [docs/walkthrough.md](docs/walkthrough.md).
 
 ## What it does
 
@@ -106,6 +109,11 @@ uv run sensibo collect --once           # or --daemon for continuous collection
 uv run sensibo query latest <pod-id>    # offline, from the local store
 uv run sensibo room name <id> bedroom --apply   # name your sensing locations
 
+# Sensor health, alerts, and reports — all run inside the collect daemon
+uv run sensibo query health --json              # offline: which sensors are down right now
+uv run sensibo notify test --apply               # send a test alert to the configured webhook/script
+uv run sensibo report daily --apply              # render + deliver a 24h SVG chart
+
 # Automate — local rules need a dry-run before they can arm
 uv run sensibo rule add --file examples/cross-room-motion-temp.rule.json
 uv run sensibo rule dry-run <name> && uv run sensibo rule arm <name>
@@ -141,8 +149,10 @@ See [`docs/deployment.md`](docs/deployment.md).
 | `read <id>` | One snapshot of every current reading for a pod or Room Sensor id. |
 | `set <pod>` | Control the AC — dry-run by default, `--apply` commits. |
 | `collect` | Poll the fleet on a cadence into the local store; first run backfills. |
-| `query` | Offline reads from the local store: latest, range, locations. |
+| `query` | Offline reads from the local store: latest, range, locations, sensor health. |
 | `room` | Name sensing locations; flag sensors gone stale. |
+| `notify` | Preview or send a test alert through the configured webhook/script (dry-run by default). |
+| `report` | Render (and optionally deliver) a daily/weekly offline SVG chart (dry-run by default). |
 | `rule` | Local rules engine: cross-room conditions, hysteresis, dry-run before arm. |
 | `smartmode` | Climate React — runs in Sensibo's cloud. |
 | `schedule` | Cloud schedules (survive the local daemon sleeping). |
@@ -176,6 +186,9 @@ is a bug.
 - [`docs/deployment.md`](docs/deployment.md) — the always-on host: the systemd
   user units `sensibo service` installs, why lingering is load-bearing, and why
   the rules daemon is deliberately excluded.
+- [`docs/health.md`](docs/health.md) — sensor health, alerting, and offline
+  SVG reports: outage classes, thresholds, notification config, and the
+  local-execution caveat.
 - [`docs/roadmap.md`](docs/roadmap.md) — build order, and which automations run
   in Sensibo's cloud vs. need a daemon alive.
 - [`docs/history.md`](docs/history.md) — the before-state this build started
