@@ -329,13 +329,16 @@ def test_location_page_history_window_excludes_readings_older_than_the_default_l
         store.upsert_location("pod-window", kind="pod", product_model="elements", seen_at=now)
         # One reading well inside the default 24h window, one well outside it.
         store.record_reading("pod-window", "temperature", 1.0, timestamp=now - 3600)
-        store.record_reading("pod-window", "temperature", 999.0, timestamp=now - (72 * 3600))
+        # A sentinel no timestamp, epoch, or heartbeat on the page can contain
+        # (a bare "999" collided with wall-clock values in CI, 2026-09-02).
+        stale_value = 4242.4242
+        store.record_reading("pod-window", "temperature", stale_value, timestamp=now - (72 * 3600))
 
     _status, body = _get(srv, "/location/pod-window")
     # The 72h-old reading must not appear anywhere in the rendered page: not
     # in "Latest readings" (it isn't the latest) and not in the sparkline
     # (outside the default lookback window).
-    assert "999" not in body
+    assert "4242.4242" not in body
 
 
 def test_api_history_defaults_to_a_bounded_limit_for_a_large_series(running_server) -> None:
