@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-09-02
+
+### Added
+
+- validate-delivery skill vendored from devague (the execution-to-evidence leg: behavioral tests agent-side, evidence and delta records via the devague CLI)
+- devague frame sensor-health-alerts-and-chart-reports: /scope survey for sensor health tracking, down detection, webhook/script notifications, and daily/weekly chart reports (17 claims, 12 scope entries with provenance, 3 open questions, 3 parked unknowns)
+
+### Changed
+
+- scope, challenge, summarize-delivery skills re-synced to devague 0.23.0 (subagent-aware exploration, evidence/delta/lapse-aware summary)
+- docs/skill-sources.md: the devague-origin method-only skills (scope, challenge, deviate, validate-delivery, summarize-delivery) now have provenance rows; the devague-origin family is eight, not three
+
 ## [0.7.2] - 2026-08-25
 
 ### Added

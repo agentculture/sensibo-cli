@@ -6,10 +6,15 @@ AgentCulture **skills supplier** after the steward → guildmaster cutover
 (`steward doctor`, the sibling-pattern baseline); only the skills-supplier role
 moved. This file tracks provenance so re-syncs stay deterministic.
 
-Three skills (`think`, `spec-to-plan`, `assign-to-workforce`) originate in
-[`agentculture/devague`](https://github.com/agentculture/devague) and are
-**re-broadcast** through guildmaster — cite guildmaster's copy; track devague as
-the true origin. One skill, `ask-colleague` (formerly `outsource`), originates in
+Eight skills originate in
+[`agentculture/devague`](https://github.com/agentculture/devague). Three of them
+(`think`, `spec-to-plan`, `assign-to-workforce`) are **re-broadcast** through
+guildmaster — cite guildmaster's copy; track devague as the true origin. The
+other five (`scope`, `challenge`, `deviate`, `validate-delivery`,
+`summarize-delivery`) are method-only (a `SKILL.md`, no `scripts/` resolver)
+and are vendored **directly from the sibling `devague` checkout** — see the
+[devague method-only skills](#devague-method-only-skills-vendored-directly)
+section below. One skill, `ask-colleague` (formerly `outsource`), originates in
 [`agentculture/colleague`](https://github.com/agentculture/colleague) — the
 renamed `convertible`. guildmaster's re-broadcast still carries the old
 `outsource` name, so `ask-colleague` is vendored **directly from colleague** as a
@@ -33,7 +38,30 @@ is load-bearing, even where guildmaster's upstream copy omits it.
 | `think` | `../guildmaster/.claude/skills/think/` | **devague** (re-broadcast via guildmaster) | idea→spec leg of the devague workflow chain. Verbatim (already carried `type: command` at guildmaster). Origin/broadcast prose left verbatim. | 2026-05-26 (guildmaster 0.6.0) |
 | `spec-to-plan` | `../guildmaster/.claude/skills/spec-to-plan/` | **devague** (re-broadcast via guildmaster) | spec→plan leg of the devague workflow chain. Verbatim (already carried `type: command`). | 2026-05-26 (guildmaster 0.6.0) |
 | `assign-to-workforce` | `../guildmaster/.claude/skills/assign-to-workforce/` | **devague** (re-broadcast via guildmaster) | plan→parallel-implementation leg of the devague workflow chain. Verbatim (already carried `type: command`). | 2026-05-26 (guildmaster 0.6.0) |
+| `scope` | `../devague/.claude/skills/scope/` | **devague** (direct) | idea→scope leg: read-only surface survey before `/think`; findings land via the deterministic `devague scope` move with `--seeds` provenance. Method-only. Verbatim (carries `type: command`). | 2026-09-02 (devague 0.23.0) |
+| `challenge` | `../devague/.claude/skills/challenge/` | **devague** (direct) | blind-spot pass between `/think` and `/spec-to-plan`. Method-only. Verbatim. | 2026-09-02 (devague 0.23.0) |
+| `deviate` | `../devague/.claude/skills/deviate/` | **devague** (direct) | records an execution-time deviation from a confirmed plan via `devague deviate`. Method-only. Verbatim. | 2026-09-02 (devague 0.23.0, unchanged) |
+| `validate-delivery` | `../devague/.claude/skills/validate-delivery/` | **devague** (direct) | execution-to-evidence leg: runs the plan's behavioral tests agent-side after `assign-to-workforce`, files `evidence` / `delta` records via the CLI, never inside it. Method-only. Verbatim. | 2026-09-02 (devague 0.23.0) |
+| `summarize-delivery` | `../devague/.claude/skills/summarize-delivery/` | **devague** (direct) | closes the loop: planned vs actual, evidence-backed delivery claims, drift. Method-only. Verbatim. | 2026-09-02 (devague 0.23.0) |
 | `ask-colleague` | `../colleague/.claude/skills/ask-colleague/` | **colleague** (renamed from convertible; vendored directly — guildmaster re-broadcast pending) | The first-party front door to the `colleague` CLI: hand a scoped task to a *different* engine/mind via `explore` / `review` / `write`, grade a finished work item via `feedback` (the ROI loop), and reap stale/corrupt `colleague/*` branches a crashed run left behind via `clean`. Every verb takes `--json` (result JSON on stdout, diagnostics on stderr). `explore`/`review` run isolated in a throwaway `git worktree`; `write` **previews by default** (throwaway worktree, no side effects) and refuses a dirty tree only when applying (`--apply` / `--pr`). Verbatim except one consumer-identifying clause in the Provenance paragraph (`colleague vendors from guildmaster` → `sensibo-cli vendors from guildmaster`); already carried `type: command`. Optional runtime dep: **`colleague`** on PATH. | 2026-06-12 (colleague 1.7.0, direct) |
+
+## devague method-only skills (vendored directly)
+
+`scope`, `challenge`, `deviate`, `validate-delivery`, and `summarize-delivery`
+have no `scripts/` directory — each `SKILL.md` invokes the `devague` CLI
+directly (`uv tool install devague`). They are pulled straight from the
+`devague` origin rather than guildmaster's re-broadcast, so a re-sync is:
+
+```bash
+for s in scope challenge deviate validate-delivery summarize-delivery; do
+  diff -u ../devague/.claude/skills/$s/SKILL.md .claude/skills/$s/SKILL.md
+  cp ../devague/.claude/skills/$s/SKILL.md .claude/skills/$s/SKILL.md
+done
+```
+
+No adaptations are applied — devague's copies already carry `type: command`
+and contain no consumer-identifying prose. `devague learn skills` teaches the
+same eight-skill family and its authoring recipe.
 
 ## Local skills
 

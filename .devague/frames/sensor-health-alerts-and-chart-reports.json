@@ -1,0 +1,379 @@
+{
+  "slug": "sensor-health-alerts-and-chart-reports",
+  "title": "sensor health, alerts, and chart reports",
+  "schema_version": 6,
+  "status": "drafting",
+  "created": "2026-09-02T15:59:03Z",
+  "updated": "2026-09-02T16:27:00Z",
+  "claims": [
+    {
+      "id": "c1",
+      "kind": "announcement",
+      "text": "sensibo-cli now watches every sensor in the home: each reading every pod and Room Sensor reports lands in the local sqlite store, a sensor that goes quiet or runs its battery down is flagged and announced on Discord, and a daily and a weekly chart of the measurements is delivered as an image report",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c2",
+      "kind": "requirement",
+      "text": "Every number a sensor provides is saved: temperature, humidity, movement, air quality, battery - whatever fields each pod and Room Sensor reports - into a queryable local database",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c3",
+      "kind": "decision",
+      "text": "The store is sqlite (or something equally small and file-based); no database server",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c4",
+      "kind": "requirement",
+      "text": "The system detects when a sensor is down, e.g. its battery ran out, and records that state",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c5",
+      "kind": "requirement",
+      "text": "When a device is down a notification goes out - to Discord in the operator's case - through either a generic webhook URL or an operator-configured script that the daemon runs; there is no dependency on the discord-bot-cli, which would be too specific",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c6",
+      "kind": "decision",
+      "text": "Notification transport is a generic webhook (plain HTTP POST) or a configurable script hook; not a Discord-specific client or library",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c7",
+      "kind": "requirement",
+      "text": "A daily and a weekly image report - a diagram of the collected measurements - is produced and delivered",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c8",
+      "kind": "assumption",
+      "text": "The 'save every reading in sqlite' half already shipped and is not rebuilt: sensibo/store keeps a field-flexible readings table (location_id, field, timestamp) and sensibo/collect stores whatever keys each measurements object carries; the operator's real store holds 413,092 rows across 3 locations since 2026-02-10 and the sensibo-collect systemd unit is active - the delta for this idea is health, alerting, and reports on top of that store",
+      "origin": "llm",
+      "status": "proposed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c9",
+      "kind": "requirement",
+      "text": "Liveness is persisted, not only derived: the collector drops connectionStatus.isAlive today (sensibo/collect/collector.py records only measurements fields), so a health record per location - status, down_since, last_ok, and each up/down transition - is added to the store so 'when did it go down and for how long' is answerable offline",
+      "origin": "llm",
+      "status": "proposed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c10",
+      "kind": "assumption",
+      "text": "'Down' is decided from the location's own last reading time going stale (the existing is_stale helper in sensibo/store/rooms.py, default 24h, already used by room list, the web dashboard, and the MCP locations tool) combined with connectionStatus, with the threshold configurable per kind - a Room Sensor reports every ~90s so 24h is far too slow for a battery-out alert",
+      "origin": "llm",
+      "status": "proposed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c11",
+      "kind": "requirement",
+      "text": "Battery is tracked by its real field name: the operator's Room Sensors report batteryVoltage in millivolts (3000 fresh; 1638 and 1728 were the last values before each sensor went silent), while sensibo/store/_units.py only knows 'battery' as % and docs/sensibo-api.md lists the field as 'battery' - both are corrected and a low-voltage warning threshold is added",
+      "origin": "llm",
+      "status": "proposed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c12",
+      "kind": "before_state",
+      "text": "The spare-room Room Sensor (ms_o7dH4GeY) was silent from 2026-02-10 05:52 until 2026-09-02 07:49 - about seven months - and nothing told the operator; the bedroom sensor had 9 gaps longer than 6h in July 2026 alone. The web dashboard shows a STALE flag only to whoever happens to look",
+      "origin": "llm",
+      "status": "proposed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c13",
+      "kind": "requirement",
+      "text": "Any verb that sends a notification or a report is dry-run by default and commits with --apply, like every other write verb in this repo (CLAUDE.md conventions), and it gets an explain catalog entry or the teken rubric gate fails",
+      "origin": "llm",
+      "status": "proposed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": [
+        {
+          "text": "Any verb that sends a Discord message or a report is dry-run by default and commits with --apply, like every other write verb in this repo (CLAUDE.md conventions), and it gets an explain catalog entry or the teken rubric gate fails",
+          "kind": "requirement",
+          "reason": "notification is transport-neutral per the user's webhook/script decision"
+        }
+      ]
+    },
+    {
+      "id": "c14",
+      "kind": "boundary",
+      "text": "Alerts and reports run on this machine and stop when the local daemon stops, exactly like local rules (sensibo/rules/model.py EXECUTION_LOCAL, docs/roadmap.md 'every rule states where it runs'); their output says so, and a dead collector daemon produces no alert - that watchdog gap is named, not hidden",
+      "origin": "llm",
+      "status": "proposed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c15",
+      "kind": "non_goal",
+      "text": "No runtime dependency is added for charts or notifications: pyproject.toml keeps dependencies = [], sensibo/web/_svg.py already renders stdlib-only SVG sparklines to build on, and a notification leaves the machine either as a plain urllib POST to a generic webhook or by running an operator-configured script",
+      "origin": "llm",
+      "status": "proposed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": [
+        {
+          "text": "No runtime dependency is added for charts or notifications: pyproject.toml keeps dependencies = [], sensibo/web/_svg.py already renders stdlib-only SVG sparklines to build on, and notifications leave the machine or by a plain urllib POST to a generic webhook, or by running an operator-configured script",
+          "kind": "non_goal",
+          "reason": "garbled sentence; also reflects the user's no-Discord-dependency decision"
+        }
+      ]
+    },
+    {
+      "id": "c16",
+      "kind": "boundary",
+      "text": "The local rules engine's condition grammar (threshold, occupancy, time_window in sensibo/rules/model.py) and the compressor safety gates are not changed by this work unless the user decides sensor-down should also be a rule condition",
+      "origin": "llm",
+      "status": "proposed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c17",
+      "kind": "success_signal",
+      "text": "Pulling a Room Sensor's battery produces a Discord message within a few poll cycles naming the sensor and when it was last heard; re-inserting it produces a recovery message; the daily image lands every morning with one series per location and field",
+      "origin": "llm",
+      "status": "proposed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c18",
+      "kind": "audience",
+      "text": "The home operator, who wants to hear about a dead sensor without checking a dashboard, and the agents (CLI, MCP) that read the store and should be able to ask 'which sensors are down right now'",
+      "origin": "llm",
+      "status": "proposed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    }
+  ],
+  "open_vagueness": [
+    {
+      "id": "v1",
+      "text": "The real battery-dead voltage threshold: the two observed last-before-silence values are 1638 mV and 1728 mV, one sensor each - not enough to fix a warning level; needs more outages or Sensibo documentation",
+      "kind": "unknown_nonblocking",
+      "claim_id": null,
+      "resolved": false,
+      "resolution": "",
+      "resolution_claim_id": null
+    },
+    {
+      "id": "v2",
+      "text": "Whether Sensibo flips connectionStatus.isAlive to false for a battery-dead Room Sensor or only freezes its measurements - today both sensors read online after recovery, the fixture assumes false, and the store never recorded the value during the 7-month outage",
+      "kind": "unknown_nonblocking",
+      "claim_id": null,
+      "resolved": false,
+      "resolution": "",
+      "resolution_claim_id": null
+    },
+    {
+      "id": "v3",
+      "text": "Who watches the watcher: if the collect daemon itself dies no down-alert can fire; systemd Restart=always covers crashes but not a powered-off host",
+      "kind": "unknown_nonblocking",
+      "claim_id": null,
+      "resolved": false,
+      "resolution": "",
+      "resolution_claim_id": null
+    }
+  ],
+  "scope_entries": [
+    {
+      "id": "s1",
+      "surface": "sensibo/store/_schema.py + sensibo/store/store.py",
+      "finding": "the retention pillar exists: EAV readings table keyed (location_id, field, timestamp) with upsert semantics, a locations table with first_seen/last_seen, and a meta side-table; there is no health/status table and no record of up/down transitions - last_seen is the only liveness fact and it is overwritten, never historised",
+      "seeds": [
+        "c8",
+        "c9",
+        "c2",
+        "c3"
+      ]
+    },
+    {
+      "id": "s2",
+      "surface": "sensibo/collect/collector.py",
+      "finding": "run_cycle stores only keys of each measurements object (plus room sensors nested in motionSensors); connectionStatus.isAlive is read by the devices/read verbs (_fleet.py) but never persisted; _seen_at deliberately uses the reading's own time so a dead sensor's last_seen freezes - the right raw signal for staleness is already there",
+      "seeds": [
+        "c9",
+        "c10"
+      ]
+    },
+    {
+      "id": "s3",
+      "surface": "sensibo/store/_units.py + docs/sensibo-api.md per-model table",
+      "finding": "the unit map has 'battery' -> '%' but the operator's motion_sensor devices report 'batteryVoltage' (unit stored NULL); the API doc's Room Sensor row also says 'battery' - a doc-vs-fleet mismatch caught against real hardware",
+      "seeds": [
+        "c11"
+      ]
+    },
+    {
+      "id": "s4",
+      "surface": "~/.sensibo/sensibo.db (live store) + sensibo devices --json (one read-only fleet call)",
+      "finding": "fleet is 1 airq pod (8DdxNuyc, Central) and 2 motion_sensor Room Sensors (ms_kDup7cVx bedroom, ms_o7dH4GeY spare-room); pod fields co2 etoh feelsLike humidity iaq motion roomIsOccupied rssi temperature tvoc, sensor fields batteryVoltage humidity motion rssi temperature; spare-room silent 2026-02-10 -> 2026-09-02 07:49 (320 rows vs bedroom's 7958), bedroom 9 gaps >6h in July; batteryVoltage 3000 fresh, 1638/1728 last-before-silence",
+      "seeds": [
+        "c12",
+        "c11",
+        "c10"
+      ]
+    },
+    {
+      "id": "s5",
+      "surface": "sensibo/store/rooms.py is_stale + sensibo/web/_wire.py + sensibo/web/_render.py + sensibo/mcp_server/_tools.py",
+      "finding": "staleness (default 24h) is computed at read time and surfaced as a STALE flag in room list, the dashboard, and the MCP locations tool; nothing persists it, nothing notifies, and 24h is tuned for a human glance not for a ~90s-cadence sensor",
+      "seeds": [
+        "c10",
+        "c9"
+      ]
+    },
+    {
+      "id": "s6",
+      "surface": "sensibo/rules/model.py + sensibo/rules/evaluate.py",
+      "finding": "leaf condition types are threshold, occupancy, time_window - there is no 'location is stale/down' condition, and rules only drive acState, never a notification; the engine is explicitly local-execution and carries the EXECUTION_LOCAL marker every output renders",
+      "seeds": [
+        "c16",
+        "c14"
+      ]
+    },
+    {
+      "id": "s7",
+      "surface": "sensibo/web/_svg.py",
+      "finding": "render_sparkline draws stdlib-only SVG with even downsampling (max_points) from ReadingRecord lists - a ready base for a daily/weekly multi-series chart; there is no rasteriser, and PNG output is impossible without a new dependency or an external tool",
+      "seeds": [
+        "c15",
+        "c7"
+      ]
+    },
+    {
+      "id": "s8",
+      "surface": "pyproject.toml dependencies = [] + CLAUDE.md 'Zero runtime dependencies, deliberately'",
+      "finding": "adding a chart or notification library is a recorded architectural decision, not a convenience; a plain urllib POST covers a generic webhook and subprocess covers an operator-configured script hook without any new dependency",
+      "seeds": [
+        "c15",
+        "c5"
+      ]
+    },
+    {
+      "id": "s9",
+      "surface": "../discord-bot-cli (sibling repo) + discord binary on PATH",
+      "finding": "a separate agent CLI with channel/message/thread/user verbs exists in the workspace, but the user ruled it out as too specific a dependency; this repo has zero references to Discord today, so the notification surface is a generic webhook POST or a configurable script hook",
+      "seeds": [
+        "c5",
+        "c6",
+        "c15"
+      ]
+    },
+    {
+      "id": "s10",
+      "surface": "sensibo/service/_units.py + docs/deployment.md + docs/roadmap.md 'Answered: the always-on host'",
+      "finding": "service install writes user units for collect --daemon and web only, Restart=always, lingering enabled; the rules daemon was deliberately excluded; report/alert scheduling has no unit or timer yet and would need either an in-daemon scheduler or a systemd timer",
+      "seeds": [
+        "c14"
+      ]
+    },
+    {
+      "id": "s11",
+      "surface": "sensibo/explain/catalog.py + sensibo/cli/_commands/ + CLAUDE.md conventions",
+      "finding": "a new verb is a module with register(), wired in _build_parser(), plus a catalog entry (teken cli doctor --strict fails otherwise); every write verb is dry-run by default with --apply; results to stdout, diagnostics to stderr, --json everywhere",
+      "seeds": [
+        "c13"
+      ]
+    },
+    {
+      "id": "s12",
+      "surface": "docs/specs/2026-07-14-...md + .devague/frames (previous exported frame)",
+      "finding": "the shipped spec already named the stale sensor ('last reported 2026-02-10 - likely offline or battery-dead') and tests/_fixtures_fleet.py models one stale Room Sensor with connectionStatus.isAlive false and empty measurements - the problem was seen, only the alerting was never scoped",
+      "seeds": [
+        "c12"
+      ]
+    }
+  ],
+  "lapses": [],
+  "obligations": []
+}
