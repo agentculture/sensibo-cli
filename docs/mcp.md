@@ -89,8 +89,9 @@ server.
 
 ## Tools
 
-Five tools, each mirroring one CLI verb's exact behaviour so the MCP surface
-and the CLI surface never give two different answers to the same request:
+Five tools are wired onto the MCP server, each mirroring one CLI verb's exact
+behaviour so the MCP surface and the CLI surface never give two different
+answers to the same request:
 
 | Tool | Mirrors | What it does |
 |------|---------|--------------|
@@ -99,6 +100,31 @@ and the CLI surface never give two different answers to the same request:
 | `query_history` | `sensibo query` | Offline reads from the **local store only** — never touches the network. `mode="latest"` (default) or `mode="range"`, by location and field. |
 | `set_ac_state` | `sensibo set` | Control an AC's power/mode/target/fan/swing. |
 | `room_list` | `sensibo room list` | Every known sensing location: id, kind, model, room name, alias, last-seen, and a staleness flag. Local store only. |
+
+As of task t9, `room_list`'s staleness threshold defaults to
+`sensibo.health.model.HealthConfig.from_env().down_after_seconds` (the same
+source of truth the web dashboard and `sensibo room list` use — see
+[`web.md`](web.md), "Staleness: one source of truth"), not a hardcoded 24h,
+and each row also carries `health_status`/`health_since`/`health_last_ok`
+from the health table when a row exists for that location (`None` when it
+doesn't — callers fall back to `stale`).
+
+### `sensibo_health` (task t9)
+
+`sensibo.mcp_server._tools.sensibo_health(since=None, db=None)` is
+implemented and unit-tested (`tests/test_mcp_tools.py`) but **not yet wired
+onto the MCP server** (`sensibo.mcp_server.build_server` still registers only
+the five tools above) — that wiring is left to a follow-on task so this one
+stays inside its file list. Once wired, it will mirror `sensibo query health
+--json`: every location's current health row (`status` — one of `ok` /
+`down` / `unknown` / `unknown_parent_down` — `since`, `last_ok`,
+`parent_pod_id`) plus every transition since an optional ISO 8601 `since`
+timestamp, each transition carrying `duration_seconds` when it is the one
+that *closed* an outage (a transition back to `ok`) and `None` otherwise
+(including an outage still open). The payload also reports the collector's
+own heartbeat, `last_cycle_at` / `last_cycle_outcome` — two store-level facts
+`sensibo collect` writes every poll cycle — so a client can tell "no alerts"
+apart from "the collector stopped running". Local store only, read-only.
 
 ### The `apply`-defaults-to-`false` contract
 

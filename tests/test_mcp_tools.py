@@ -12,6 +12,7 @@ without ``--apply``.
 
 from __future__ import annotations
 
+import datetime
 import time
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ import pytest
 
 import sensibo.mcp_server._tools as tools
 from sensibo.api import HttpError
+from sensibo.health.model import STATUS_DOWN, STATUS_OK
 from sensibo.store import KIND_POD, KIND_ROOM_SENSOR, Store
 
 POD_ID = "pod-airq-1"
@@ -469,3 +471,107 @@ def test_room_list_reports_alias_and_staleness(tmp_path: Path) -> None:
 def test_room_list_empty_store(tmp_path: Path) -> None:
     result = tools.room_list(db=str(tmp_path / "sensibo.db"))
     assert result["locations"] == []
+
+
+def test_room_list_default_stale_after_hours_derives_from_health_config_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SENSIBO_HEALTH_DOWN_AFTER", "1800")
+    result = tools.room_list(db=str(tmp_path / "sensibo.db"))
+    assert result["stale_after_hours"] == pytest.approx(1800.0 / 3600.0)
+
+
+def test_room_list_carries_health_fields_when_a_row_exists(tmp_path: Path) -> None:
+    db_path = tmp_path / "sensibo.db"
+    now = time.time()
+    with Store(db_path=db_path) as store:
+        store.upsert_location(POD_ID, kind=KIND_POD, product_model="airq", seen_at=now)
+        store.upsert_location("pod-no-health", kind=KIND_POD, product_model="airq", seen_at=now)
+        store.set_health(POD_ID, status=STATUS_DOWN, since=now - 500, last_ok=now - 900)
+
+    result = tools.room_list(db=str(db_path))
+    by_id = {loc["id"]: loc for loc in result["locations"]}
+    assert by_id[POD_ID]["health_status"] == STATUS_DOWN
+    assert by_id[POD_ID]["health_since"] == pytest.approx(now - 500)
+    assert by_id[POD_ID]["health_last_ok"] == pytest.approx(now - 900)
+    assert by_id["pod-no-health"]["health_status"] is None
+    assert by_id["pod-no-health"]["stale"] is False  # falls back to the derived flag
+
+
+# --- sensibo_health (task t9) -------------------------------------------------
+
+
+def test_sensibo_health_reports_every_locations_health_row(tmp_path: Path) -> None:
+    db_path = tmp_path / "sensibo.db"
+    now = time.time()
+    with Store(db_path=db_path) as store:
+        store.upsert_location(POD_ID, kind=KIND_POD, product_model="airq", seen_at=now)
+        store.set_health(POD_ID, status=STATUS_OK, since=now - 10, last_ok=now)
+        store.set_health("ms_1", status=STATUS_DOWN, since=now - 500, last_ok=now - 900)
+
+    result = tools.sensibo_health(db=str(db_path))
+
+    by_id = {row["location_id"]: row for row in result["locations"]}
+    assert by_id[POD_ID]["status"] == STATUS_OK
+    assert by_id[POD_ID]["last_ok"] == pytest.approx(now)
+    assert by_id["ms_1"]["status"] == STATUS_DOWN
+    assert by_id["ms_1"]["since"] == pytest.approx(now - 500)
+
+
+def test_sensibo_health_reports_the_collector_heartbeat(tmp_path: Path) -> None:
+    db_path = tmp_path / "sensibo.db"
+    with Store(db_path=db_path) as store:
+        store.set_meta("last_cycle_at", "2026-09-02T12:00:00Z")
+        store.set_meta("last_cycle_outcome", "ok")
+
+    result = tools.sensibo_health(db=str(db_path))
+    assert result["last_cycle_at"] == "2026-09-02T12:00:00Z"
+    assert result["last_cycle_outcome"] == "ok"
+
+
+def test_sensibo_health_heartbeat_is_none_when_no_cycle_has_run(tmp_path: Path) -> None:
+    result = tools.sensibo_health(db=str(tmp_path / "sensibo.db"))
+    assert result["last_cycle_at"] is None
+    assert result["last_cycle_outcome"] is None
+
+
+def test_sensibo_health_filters_transitions_by_since(tmp_path: Path) -> None:
+    db_path = tmp_path / "sensibo.db"
+    now = time.time()
+    with Store(db_path=db_path) as store:
+        store.record_transition(POD_ID, None, STATUS_OK, at=now - 1000)
+        store.record_transition(POD_ID, STATUS_OK, STATUS_DOWN, at=now - 500)
+        store.record_transition(POD_ID, STATUS_DOWN, STATUS_OK, at=now - 100)
+
+    all_transitions = tools.sensibo_health(db=str(db_path))["transitions"]
+    assert len(all_transitions) == 3
+
+    since_iso = datetime.datetime.fromtimestamp(now - 600, tz=datetime.timezone.utc).isoformat()
+    recent = tools.sensibo_health(since=since_iso, db=str(db_path))["transitions"]
+    assert len(recent) == 2  # the down and the recovery, not the first-run seed
+
+
+def test_sensibo_health_attaches_duration_seconds_to_closed_outages_only(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "sensibo.db"
+    now = time.time()
+    with Store(db_path=db_path) as store:
+        store.record_transition(POD_ID, None, STATUS_OK, at=now - 1000)
+        store.record_transition(POD_ID, STATUS_OK, STATUS_DOWN, at=now - 500)
+        store.record_transition(POD_ID, STATUS_DOWN, STATUS_OK, at=now - 100)
+        # A second location's outage that never recovers -- stays open.
+        store.record_transition("ms_1", None, STATUS_OK, at=now - 1000)
+        store.record_transition("ms_1", STATUS_OK, STATUS_DOWN, at=now - 200)
+
+    transitions = tools.sensibo_health(db=str(db_path))["transitions"]
+    by_pair = {(t["location_id"], t["to_status"], t["at"]): t for t in transitions}
+
+    closed = by_pair[(POD_ID, STATUS_OK, now - 100)]
+    assert closed["duration_seconds"] == pytest.approx(400.0)
+
+    still_down = by_pair[("ms_1", STATUS_DOWN, now - 200)]
+    assert still_down["duration_seconds"] is None
+
+    first_run_seed = by_pair[(POD_ID, STATUS_OK, now - 1000)]
+    assert first_run_seed["duration_seconds"] is None

@@ -17,6 +17,8 @@ Path                    Method  What
 ``/api/latest``         GET     JSON: latest reading(s) (``?location=&field=``)
 ``/api/history``        GET     JSON: a field's time series, bounded (``?location=&field=``
                                  ``[&since=][&until=][&limit=]``, default limit 1000)
+``/reports/<name>``     GET     One offline ``*.svg`` report, from the reports directory
+                                 (task t9; ``?SENSIBO_REPORTS_DIR`` or ``~/.sensibo/reports/``)
 ``/control``            POST    HTML control result (dry-run, or applied with ``confirm``)
 ``/api/set``            POST    JSON control result, same token/confirm contract
 ======================  ======  ====================================================
@@ -72,8 +74,10 @@ without ever calling ``rfile.read``).
 from __future__ import annotations
 
 import json as _json
+import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -81,8 +85,8 @@ from sensibo.api import ApiError, SensiboClient
 from sensibo.cli._commands.set import _FLAG_TO_FIELD, _process_pod
 from sensibo.cli._errors import CliError
 from sensibo.cli._output import emit_diagnostic
+from sensibo.health.model import HealthConfig
 from sensibo.store import Store
-from sensibo.store.rooms import DEFAULT_STALE_AFTER_HOURS
 
 from . import _render
 from ._token import check_token
@@ -94,6 +98,16 @@ from ._wire import location_to_dict, reading_to_dict
 #: See docs/web.md, "Trust model".
 DEFAULT_BIND_HOST = "0.0.0.0"  # nosec B104
 DEFAULT_BIND_PORT = 8323
+
+#: ``sensibo web``'s reports directory env override (task t9). Mirrors the
+#: ``~/.sensibo``-rooted convention every other path in this project uses
+#: (``sensibo/store/_paths.py``, ``sensibo/web/_token.py``).
+ENV_REPORTS_DIR = "SENSIBO_REPORTS_DIR"
+
+#: Default location for the offline SVG reports this server exposes read-only
+#: under ``/reports/<name>`` (task t9). Same trust model as the rest of the
+#: dashboard's GET surface: open reads, no token.
+DEFAULT_REPORTS_DIR = Path.home() / ".sensibo" / "reports"
 
 _CONTROL_FIELDS = ("power", "mode", "target", "fan", "swing")
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -181,6 +195,47 @@ def _parse_body(raw: bytes, content_type: str) -> dict[str, str]:
     return {k: v[-1] for k, v in parsed.items()}
 
 
+def _resolve_reports_dir(reports_dir: "str | os.PathLike[str] | None") -> Path:
+    """Resolve the reports directory (task t9): explicit arg, then
+    ``SENSIBO_REPORTS_DIR``, then :data:`DEFAULT_REPORTS_DIR`.
+
+    Never touches the filesystem — a missing directory resolves to a path
+    like any other; :func:`_list_reports` is what turns "missing" into an
+    empty listing rather than an error.
+    """
+    if reports_dir is not None:
+        return Path(reports_dir)
+    override = os.environ.get(ENV_REPORTS_DIR)
+    if override:
+        return Path(override)
+    return DEFAULT_REPORTS_DIR
+
+
+def _list_reports(reports_dir: Path) -> list[str]:
+    """Every ``*.svg`` report's filename, newest first. Empty if the
+    directory doesn't exist yet — not an error (task t9 criterion 3)."""
+    if not reports_dir.is_dir():
+        return []
+    entries = [p for p in reports_dir.iterdir() if p.is_file() and p.suffix == ".svg"]
+    entries.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return [p.name for p in entries]
+
+
+def _safe_report_path(reports_dir: Path, name: str) -> Path | None:
+    """The report file ``name`` resolves to, or ``None`` if ``name`` is
+    unsafe (path traversal) or not an ``.svg`` (task t9 criterion 3).
+
+    Rejects on the raw (already-unquoted) name rather than trusting
+    ``Path.resolve()`` to sort it out — no ``/``, no ``..``, no leading dot
+    segment, and the file must actually end in ``.svg``.
+    """
+    if not name or not name.endswith(".svg"):
+        return None
+    if "/" in name or "\\" in name or ".." in name:
+        return None
+    return reports_dir / name
+
+
 class _NotFound(Exception):
     pass
 
@@ -211,6 +266,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._get_api_latest(query)
             elif path == "/api/history":
                 self._get_api_history(query)
+            elif path.startswith("/reports/"):
+                self._get_report(unquote(path[len("/reports/") :]))
             else:
                 self._send_text(404, "not found\n")
         except _NotFound as err:
@@ -220,8 +277,20 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _get_index(self) -> None:
         with Store(db_path=self.server.db_path) as store:
-            rows = [(loc, store.latest_readings(loc.id)) for loc in store.list_locations()]
-        body = _render.render_index(rows, stale_after_hours=self.server.stale_after_hours)
+            rows = [
+                (loc, store.latest_readings(loc.id), store.get_health(loc.id))
+                for loc in store.list_locations()
+            ]
+            last_cycle_at = store.get_meta("last_cycle_at")
+            last_cycle_outcome = store.get_meta("last_cycle_outcome")
+        reports = _list_reports(self.server.reports_dir)
+        body = _render.render_index(
+            rows,
+            stale_after_hours=self.server.stale_after_hours,
+            last_cycle_at=last_cycle_at,
+            last_cycle_outcome=last_cycle_outcome,
+            reports=reports,
+        )
         self._send_html(200, body)
 
     def _get_location(self, location_id: str) -> None:
@@ -230,6 +299,7 @@ class _Handler(BaseHTTPRequestHandler):
             if loc is None:
                 raise _NotFound(f"unknown location: {location_id}")
             latest = store.latest_readings(loc.id)
+            health = store.get_health(loc.id)
             # Bounded lookback window + SQL-side row cap (Qodo 3581287838):
             # never fetch a field's entire history to render one page.
             since = time.time() - _HISTORY_WINDOW_SECONDS
@@ -238,20 +308,34 @@ class _Handler(BaseHTTPRequestHandler):
                 for field in latest
             }
         body = _render.render_location(
-            loc, latest, history, stale_after_hours=self.server.stale_after_hours
+            loc, latest, history, stale_after_hours=self.server.stale_after_hours, health=health
         )
         self._send_html(200, body)
 
     def _get_api_locations(self) -> None:
         with Store(db_path=self.server.db_path) as store:
             locations = store.list_locations()
+            health_by_id = {h.location_id: h for h in store.list_health()}
         payload = {
             "locations": [
-                location_to_dict(loc, stale_after_hours=self.server.stale_after_hours)
+                location_to_dict(
+                    loc,
+                    stale_after_hours=self.server.stale_after_hours,
+                    health=health_by_id.get(loc.id),
+                )
                 for loc in locations
             ]
         }
         self._send_json(200, payload)
+
+    def _get_report(self, name: str) -> None:
+        """Serve one ``*.svg`` from the reports directory (task t9,
+        criterion 3). Same trust model as every other GET: open, no token.
+        """
+        path = _safe_report_path(self.server.reports_dir, name)
+        if path is None or not path.is_file():
+            raise _NotFound(f"unknown report: {name}")
+        self._send_svg(200, path.read_bytes())
 
     def _get_api_latest(self, query: dict[str, str]) -> None:
         location_id = query.get("location")
@@ -437,6 +521,13 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_svg(self, status: int, data: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "image/svg+xml")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
 
 class WebServer(ThreadingHTTPServer):
     """The dashboard server: one thread per request, so a slow control POST
@@ -445,6 +536,16 @@ class WebServer(ThreadingHTTPServer):
     ``client_factory`` defaults to the real :class:`SensiboClient` (built
     fresh per write request, matching how every CLI verb builds one per
     invocation); tests inject a fake to prove writes never touch the network.
+
+    ``stale_after_hours`` defaults to ``None``, which resolves at construction
+    time — the CLI/server boundary — via ``HealthConfig.from_env().
+    down_after_seconds / 3600.0`` (task t9): the single source of truth for
+    staleness, honoring an operator's ``SENSIBO_HEALTH_DOWN_AFTER`` override.
+    Tests inject an explicit value for determinism, same as before.
+
+    ``reports_dir`` resolves the same way (task t9, criterion 3): an explicit
+    argument wins, then ``SENSIBO_REPORTS_DIR``, then
+    ``~/.sensibo/reports/`` (:data:`DEFAULT_REPORTS_DIR`).
     """
 
     daemon_threads = True
@@ -457,10 +558,16 @@ class WebServer(ThreadingHTTPServer):
         db_path: str | None = None,
         token: str,
         client_factory: Callable[[], object] = SensiboClient,
-        stale_after_hours: float = DEFAULT_STALE_AFTER_HOURS,
+        stale_after_hours: float | None = None,
+        reports_dir: "str | os.PathLike[str] | None" = None,
     ) -> None:
         super().__init__(server_address, _Handler)
         self.db_path = db_path
         self.token = token
         self.client_factory = client_factory
-        self.stale_after_hours = stale_after_hours
+        self.stale_after_hours = (
+            stale_after_hours
+            if stale_after_hours is not None
+            else HealthConfig.from_env().down_after_seconds / 3600.0
+        )
+        self.reports_dir = _resolve_reports_dir(reports_dir)

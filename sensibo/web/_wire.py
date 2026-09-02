@@ -5,13 +5,21 @@ keys, same ISO formatting) so the ``/api/*`` endpoints describe the store the
 same way ``sensibo query --json`` does, without an import from
 :mod:`sensibo.web` into :mod:`sensibo.cli._commands` for this narrow piece —
 :mod:`sensibo.web` depends on :mod:`sensibo.store` only here.
+
+**Health (task t9).** ``location_to_dict`` accepts an optional
+:class:`~sensibo.store.HealthRecord` (:meth:`sensibo.store.Store.get_health`).
+When one exists, the wire payload carries the health table's own
+``status``/``since``/``last_ok`` — the same values ``sensibo query health``
+will show — alongside the derived ``stale`` flag. When there is no health row
+yet (the evaluator hasn't run, or this is a fresh location), the
+``health_*`` fields are ``None`` and callers fall back to ``stale``.
 """
 
 from __future__ import annotations
 
 import datetime
 
-from sensibo.store import LocationRecord, ReadingRecord
+from sensibo.store import HealthRecord, LocationRecord, ReadingRecord
 from sensibo.store.rooms import DEFAULT_STALE_AFTER_HOURS, is_stale
 
 
@@ -29,9 +37,12 @@ def display_name(loc: LocationRecord) -> str:
 
 
 def location_to_dict(
-    loc: LocationRecord, *, stale_after_hours: float = DEFAULT_STALE_AFTER_HOURS
+    loc: LocationRecord,
+    *,
+    stale_after_hours: float = DEFAULT_STALE_AFTER_HOURS,
+    health: HealthRecord | None = None,
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "id": loc.id,
         "kind": loc.kind,
         "product_model": loc.product_model,
@@ -44,7 +55,21 @@ def location_to_dict(
         "last_seen": loc.last_seen,
         "last_seen_iso": format_iso(loc.last_seen),
         "stale": is_stale(loc.last_seen, stale_after_hours=stale_after_hours),
+        "health_status": None,
+        "health_since": None,
+        "health_since_iso": None,
+        "health_last_ok": None,
+        "health_last_ok_iso": None,
     }
+    if health is not None:
+        payload["health_status"] = health.status
+        payload["health_since"] = health.since
+        payload["health_since_iso"] = format_iso(health.since)
+        payload["health_last_ok"] = health.last_ok
+        payload["health_last_ok_iso"] = (
+            format_iso(health.last_ok) if health.last_ok is not None else None
+        )
+    return payload
 
 
 def reading_to_dict(r: ReadingRecord) -> dict[str, object]:

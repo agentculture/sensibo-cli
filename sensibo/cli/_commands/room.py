@@ -11,7 +11,9 @@ and accept names the same way.
 Two verbs:
 
 * ``sensibo room list`` — every known location, flagging one ``STALE`` when
-  it hasn't been seen inside ``--stale-after`` hours (default 24).
+  it hasn't been seen inside ``--stale-after`` hours (default derived from
+  :class:`sensibo.health.model.HealthConfig`'s ``down_after_seconds``, task
+  t9's single source of truth for staleness).
 * ``sensibo room name <location-id-or-current-name> <new-alias>`` — assign a
   persistent local alias. Dry-run by default (mandatory for every write verb
   in this project); ``--apply`` persists via :meth:`sensibo.store.Store.set_alias`,
@@ -27,14 +29,21 @@ from sensibo.cli._commands._automation import JSON_HELP
 from sensibo.cli._commands.overview import emit_overview
 from sensibo.cli._errors import EXIT_USER_ERROR, CliError
 from sensibo.cli._output import emit_result
+from sensibo.health.model import HealthConfig
 from sensibo.store import KIND_POD, KIND_ROOM_SENSOR, LocationRecord, Store
 from sensibo.store.rooms import (
-    DEFAULT_STALE_AFTER_HOURS,
     AmbiguousLocationError,
     LocationNotFoundError,
     is_stale,
     resolve_location,
 )
+
+#: The CLI/server boundary where the single source of truth for staleness
+#: (task t9's ``HealthConfig.down_after_seconds``) is loaded from the
+#: environment, so ``--stale-after``'s default honors an operator's
+#: ``SENSIBO_HEALTH_DOWN_AFTER`` override exactly like the health evaluator
+#: and the web dashboard do.
+_DEFAULT_STALE_AFTER_HOURS = HealthConfig.from_env().down_after_seconds / 3600.0
 
 # Text-only friendly labels; JSON output keeps the store's raw `kind` values
 # (`pod` / `room_sensor`) so downstream consumers get a stable machine value.
@@ -225,11 +234,12 @@ def register(sub: argparse._SubParsersAction) -> None:
     ls.add_argument(
         "--stale-after",
         type=float,
-        default=DEFAULT_STALE_AFTER_HOURS,
+        default=_DEFAULT_STALE_AFTER_HOURS,
         metavar="HOURS",
         help=(
             "Flag a location STALE once it hasn't been seen for this many hours "
-            f"(default: {DEFAULT_STALE_AFTER_HOURS:g})."
+            f"(default: {_DEFAULT_STALE_AFTER_HOURS:g}, derived from HealthConfig's "
+            "down_after_seconds; honors $SENSIBO_HEALTH_DOWN_AFTER)."
         ),
     )
     ls.add_argument("--json", action="store_true", help=JSON_HELP)

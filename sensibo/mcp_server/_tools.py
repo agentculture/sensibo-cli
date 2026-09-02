@@ -16,8 +16,11 @@ no argparse, no CliError, "no network, no CLI I/O" per its own docstring) so
 the shape of a fleet snapshot never drifts between the CLI and this surface.
 It does not import :mod:`sensibo.cli._errors` or anything else CLI-specific.
 
-Five tools, each mirroring one CLI verb's exact behaviour so the MCP surface
-and the CLI surface never give two different answers to the same request:
+Six tool functions live here (five wired onto the MCP server by
+:mod:`sensibo.mcp_server`'s ``build_server``, plus :func:`sensibo_health`
+added in task t9 — see that function's docstring for why it is not yet
+wired), each mirroring one CLI verb's exact behaviour so the MCP surface and
+the CLI surface never give two different answers to the same request:
 
 * :func:`list_devices` mirrors ``sensibo devices`` — one
   :meth:`~sensibo.api.SensiboClient.fleet_snapshot` call.
@@ -30,7 +33,15 @@ and the CLI surface never give two different answers to the same request:
   contract (one changed field -> ``patch_ac_state``; two or more ->
   ``post_ac_states``), and the same safety property: ``apply`` defaults to
   ``False``, and a dry run issues zero write calls.
-* :func:`room_list` mirrors ``sensibo room list``.
+* :func:`room_list` mirrors ``sensibo room list``. As of task t9, its
+  staleness threshold defaults to :class:`~sensibo.health.model.HealthConfig`
+  (loaded via ``HealthConfig.from_env()``), and each row also carries the
+  health table's ``health_status``/``health_since``/``health_last_ok`` when a
+  row exists.
+* :func:`sensibo_health` (task t9) mirrors the local store only, never the
+  network: every location's current health row plus transitions since an
+  optional ISO 8601 timestamp — what ``sensibo query health --json`` will
+  show once that CLI verb lands.
 
 ``SensiboClient`` is imported at module scope as the test seam — tests
 monkeypatch ``sensibo.mcp_server._tools.SensiboClient`` to a fake, exactly
@@ -47,12 +58,14 @@ from typing import Any
 
 from sensibo.api import ApiError, SensiboClient
 from sensibo.cli._commands import _fleet
+from sensibo.health.model import STATUS_OK, HealthConfig
 from sensibo.store import (
-    DEFAULT_STALE_AFTER_HOURS,
+    HealthRecord,
     LocationRecord,
     LocationResolutionError,
     ReadingRecord,
     Store,
+    TransitionRecord,
     is_stale,
     resolve_location,
 )
@@ -381,8 +394,10 @@ def set_ac_state(
 # -- room_list --------------------------------------------------------------------
 
 
-def _location_summary(loc: LocationRecord, *, stale_after_hours: float) -> dict[str, Any]:
-    return {
+def _location_summary(
+    loc: LocationRecord, *, stale_after_hours: float, health: HealthRecord | None
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
         "id": loc.id,
         "kind": loc.kind,
         "product_model": loc.product_model,
@@ -390,23 +405,128 @@ def _location_summary(loc: LocationRecord, *, stale_after_hours: float) -> dict[
         "alias": loc.alias,
         "last_seen": loc.last_seen,
         "stale": is_stale(loc.last_seen, stale_after_hours=stale_after_hours),
+        "health_status": None,
+        "health_since": None,
+        "health_last_ok": None,
     }
+    if health is not None:
+        summary["health_status"] = health.status
+        summary["health_since"] = health.since
+        summary["health_last_ok"] = health.last_ok
+    return summary
 
 
-def room_list(
-    stale_after_hours: float = DEFAULT_STALE_AFTER_HOURS, db: str | None = None
-) -> dict[str, Any]:
+def room_list(stale_after_hours: float | None = None, db: str | None = None) -> dict[str, Any]:
     """Every known sensing location: id, kind, model, room name, alias, staleness.
 
     Mirrors ``sensibo room list``. Local store only. A location's ``stale``
-    flag is set once it hasn't been seen in more than ``stale_after_hours``
-    (default: 24).
+    flag is set once it hasn't been seen in more than ``stale_after_hours``,
+    which defaults to ``None`` -- resolved at this call, the MCP/CLI boundary,
+    from :class:`~sensibo.health.model.HealthConfig.from_env` (task t9's
+    single source of truth for staleness) rather than a hardcoded 24h.
+    ``health_status``/``health_since``/``health_last_ok`` carry the health
+    table's own values when a row exists for that location (``None``
+    otherwise -- callers fall back to ``stale``).
     """
+    resolved_stale_after_hours = (
+        stale_after_hours
+        if stale_after_hours is not None
+        else HealthConfig.from_env().down_after_seconds / 3600.0
+    )
     with Store(db_path=db) as store:
         locations = store.list_locations()
+        health_by_id = {h.location_id: h for h in store.list_health()}
     return {
-        "stale_after_hours": stale_after_hours,
+        "stale_after_hours": resolved_stale_after_hours,
         "locations": [
-            _location_summary(loc, stale_after_hours=stale_after_hours) for loc in locations
+            _location_summary(
+                loc,
+                stale_after_hours=resolved_stale_after_hours,
+                health=health_by_id.get(loc.id),
+            )
+            for loc in locations
         ],
+    }
+
+
+# -- sensibo_health -----------------------------------------------------------------
+
+
+def _health_row_payload(health: HealthRecord) -> dict[str, Any]:
+    return {
+        "location_id": health.location_id,
+        "status": health.status,
+        "since": health.since,
+        "since_iso": _iso_epoch(health.since),
+        "last_ok": health.last_ok,
+        "last_ok_iso": _iso_epoch(health.last_ok) if health.last_ok is not None else None,
+        "parent_pod_id": health.parent_pod_id,
+    }
+
+
+def _iso_epoch(ts: float) -> str:
+    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).isoformat()
+
+
+def _transitions_with_durations(transitions: list[TransitionRecord]) -> list[dict[str, Any]]:
+    """Attach ``duration_seconds`` to each transition that *closes* an outage.
+
+    A location's outage opens at the transition into a non-``ok`` status and
+    closes at the next transition back to ``ok`` for that same location;
+    ``duration_seconds`` on the closing transition is the time between the
+    two. Open-ended outages (no recovery transition yet) carry
+    ``duration_seconds: None``, same as every transition that isn't itself a
+    recovery. Assumes ``transitions`` is already ordered oldest-first per
+    location, which is what :meth:`Store.list_transitions` guarantees.
+    """
+    outage_started_at: dict[str, float] = {}
+    payloads: list[dict[str, Any]] = []
+    for t in transitions:
+        duration_seconds: float | None = None
+        if t.to_status == STATUS_OK:
+            start = outage_started_at.pop(t.location_id, None)
+            if start is not None:
+                duration_seconds = t.at - start
+        else:
+            outage_started_at.setdefault(t.location_id, t.at)
+        payloads.append(
+            {
+                "location_id": t.location_id,
+                "from_status": t.from_status,
+                "to_status": t.to_status,
+                "at": t.at,
+                "at_iso": _iso_epoch(t.at),
+                "duration_seconds": duration_seconds,
+            }
+        )
+    return payloads
+
+
+def sensibo_health(since: str | None = None, db: str | None = None) -> dict[str, Any]:
+    """Every location's current health row, plus transitions since an optional
+    ISO 8601 timestamp -- mirroring what ``sensibo query health --json`` shows.
+
+    Local store only, read-only. Each health row carries ``status`` (one of
+    ``ok``/``down``/``unknown``/``unknown_parent_down``), ``since``, and
+    ``last_ok``. Each transition additionally carries ``duration_seconds``
+    when it is the transition that *closed* an outage (a transition back to
+    ``ok``); it is ``None`` for every other transition, including an outage
+    still open. Also reports the collector's own heartbeat --
+    ``last_cycle_at``/``last_cycle_outcome``, written each poll cycle by
+    ``sensibo collect`` -- so a client can tell "no alerts" apart from "the
+    collector stopped running".
+    """
+    with Store(db_path=db) as store:
+        health_rows = store.list_health()
+        since_ts = _parse_iso8601(since, "since") if since else None
+        transitions = store.list_transitions(since=since_ts)
+        last_cycle_at = store.get_meta("last_cycle_at")
+        last_cycle_outcome = store.get_meta("last_cycle_outcome")
+    return {
+        "as_of": _now_iso(),
+        "since": since,
+        "last_cycle_at": last_cycle_at,
+        "last_cycle_outcome": last_cycle_outcome,
+        "locations": [_health_row_payload(h) for h in health_rows],
+        "transitions": _transitions_with_durations(transitions),
     }

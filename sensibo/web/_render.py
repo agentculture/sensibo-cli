@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import html as _html
 
-from sensibo.store import LocationRecord, ReadingRecord
+from sensibo.health.model import STATUS_OK
+from sensibo.store import HealthRecord, LocationRecord, ReadingRecord
 from sensibo.store.rooms import is_stale
 
 from ._svg import render_sparkline
@@ -32,6 +33,9 @@ line-height: 1.4; }
   table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; }
   th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid #88888844; }
   .stale { color: #b45309; font-weight: 600; }
+  .status-badge { font-weight: 600; }
+  .status-down, .status-unknown, .status-unknown_parent_down { color: #b45309; }
+  .status-ok { color: #15803d; }
   .card { border: 1px solid #88888844; border-radius: 10px; padding: 1rem 1.25rem; margin: 1rem 0; }
   .muted { opacity: 0.75; font-size: 0.9em; }
   .control label { display: inline-block; min-width: 5.5rem; }
@@ -56,20 +60,64 @@ def _footer() -> str:
     return f'<p class="muted">{_html.escape(_DISCLAIMER)}</p>'
 
 
+# -- health badge (task t9) -------------------------------------------------
+
+
+def _health_badge(
+    loc: LocationRecord, *, stale_after_hours: float, health: HealthRecord | None
+) -> str:
+    """A location's staleness marker: the health table's own status/since/last_ok
+    when a row exists, falling back to the derived STALE flag when it does not.
+    """
+    if health is not None:
+        css = "" if health.status == STATUS_OK else " stale"
+        last_ok_text = format_iso(health.last_ok) if health.last_ok is not None else "never"
+        return (
+            f' <span class="status-badge status-{_html.escape(health.status)}{css}">'
+            f"{_html.escape(health.status)}</span>"
+            f'<span class="muted"> since {_html.escape(format_iso(health.since))}; '
+            f"last ok {_html.escape(last_ok_text)}</span>"
+        )
+    stale = is_stale(loc.last_seen, stale_after_hours=stale_after_hours)
+    return ' <span class="stale">STALE</span>' if stale else ""
+
+
+def _heartbeat(last_cycle_at: str | None, last_cycle_outcome: str | None) -> str:
+    at_text = _html.escape(last_cycle_at) if last_cycle_at else "never"
+    outcome_text = _html.escape(last_cycle_outcome) if last_cycle_outcome else "unknown"
+    return (
+        f'<p class="muted">collector heartbeat: last cycle at {at_text} '
+        f"(outcome: {outcome_text})</p>"
+    )
+
+
+def _reports_section(reports: list[str] | None) -> str:
+    reports = reports or []
+    if not reports:
+        return "<h2>Reports</h2><p>(no reports yet)</p>"
+    items = "".join(
+        f'<li><a href="/reports/{_html.escape(name)}">{_html.escape(name)}</a></li>'
+        for name in reports
+    )
+    return f"<h2>Reports</h2><ul>{items}</ul>"
+
+
 # -- index ---------------------------------------------------------------
 
 
 def render_index(
-    rows: list[tuple[LocationRecord, dict[str, ReadingRecord]]],
+    rows: list[tuple[LocationRecord, dict[str, ReadingRecord], HealthRecord | None]],
     *,
     stale_after_hours: float,
+    last_cycle_at: str | None = None,
+    last_cycle_outcome: str | None = None,
+    reports: list[str] | None = None,
 ) -> str:
     items: list[str] = []
     if not rows:
         items.append("<p>No locations yet — run <code>sensibo collect</code> first.</p>")
-    for loc, latest in sorted(rows, key=lambda pair: display_name(pair[0]).lower()):
-        stale = is_stale(loc.last_seen, stale_after_hours=stale_after_hours)
-        flag = ' <span class="stale">STALE</span>' if stale else ""
+    for loc, latest, health in sorted(rows, key=lambda row: display_name(row[0]).lower()):
+        flag = _health_badge(loc, stale_after_hours=stale_after_hours, health=health)
         name = _html.escape(display_name(loc))
         summary = (
             ", ".join(
@@ -90,7 +138,11 @@ def render_index(
         "<h1>sensibo-cli &mdash; LAN dashboard</h1>"
         "<p>Reads are open on this network; writes require the token in "
         "<code>~/.sensibo/web-token</code> (or the path given to "
-        "<code>--token-file</code>).</p>" + "".join(items) + _footer()
+        "<code>--token-file</code>).</p>"
+        + _heartbeat(last_cycle_at, last_cycle_outcome)
+        + "".join(items)
+        + _reports_section(reports)
+        + _footer()
     )
     return _page("sensibo-cli dashboard", body)
 
@@ -104,11 +156,11 @@ def render_location(
     history: dict[str, list[ReadingRecord]],
     *,
     stale_after_hours: float,
+    health: HealthRecord | None = None,
     banner: str | None = None,
 ) -> str:
     name = _html.escape(display_name(loc))
-    stale = is_stale(loc.last_seen, stale_after_hours=stale_after_hours)
-    flag = ' <span class="stale">STALE</span>' if stale else ""
+    flag = _health_badge(loc, stale_after_hours=stale_after_hours, health=health)
     parts = ['<p><a href="/">&larr; all locations</a></p>', f"<h1>{name}{flag}</h1>"]
     if banner:
         parts.append(banner)
