@@ -4,7 +4,7 @@
   "schema_version": 6,
   "status": "exported",
   "created": "2026-09-02T15:59:03Z",
-  "updated": "2026-09-02T16:46:39Z",
+  "updated": "2026-09-02T17:01:05Z",
   "claims": [
     {
       "id": "c1",
@@ -279,13 +279,19 @@
     {
       "id": "c16",
       "kind": "boundary",
-      "text": "The local rules engine's condition grammar (threshold, occupancy, time_window in sensibo/rules/model.py) and the compressor safety gates are not changed by this work unless the user decides sensor-down should also be a rule condition",
+      "text": "The rules engine changes in exactly one way: a new 'stale' leaf type. The existing threshold/occupancy/time_window semantics, the hysteresis and minimum-off-time gates, and the rate limiter are not modified",
       "origin": "llm",
       "status": "confirmed",
       "honesty_conditions": [
         {
           "id": "h11",
           "text": "sensibo/rules/model.py LEAF_TYPES, the hysteresis and rate-limit code, and tests/test_rules_engine.py are unchanged by the implementing PRs (git diff --stat against them is empty)",
+          "status": "rejected",
+          "instruction": ""
+        },
+        {
+          "id": "h20",
+          "text": "git diff of the implementing PRs against sensibo/rules/ touches only the leaf dispatch and validation for the new stale type plus its tests; hysteresis, min-off-time, and rate-limit code and tests are byte-identical",
           "status": "confirmed",
           "instruction": ""
         }
@@ -293,7 +299,13 @@
       "hard_questions": [],
       "links": [],
       "instruction": "",
-      "revisions": []
+      "revisions": [
+        {
+          "text": "The local rules engine's condition grammar (threshold, occupancy, time_window in sensibo/rules/model.py) and the compressor safety gates are not changed by this work unless the user decides sensor-down should also be a rule condition",
+          "kind": "boundary",
+          "reason": "user decided sensor-down becomes a rule condition (c36)"
+        }
+      ]
     },
     {
       "id": "c17",
@@ -366,7 +378,22 @@
           "instruction": ""
         }
       ],
-      "hard_questions": [],
+      "hard_questions": [
+        {
+          "id": "q2",
+          "text": "contradiction with c23?",
+          "resolved": true,
+          "blocking": true,
+          "resolution": "filed against the wrong id (c23 instead of c22); superseded by q3 and decision c36"
+        },
+        {
+          "id": "q3",
+          "text": "h15 (on c20) promises staleness is visible to rule evaluation so no rule acts on dead data, but decision c22 says sensor-down does not become a rule condition and the rules grammar is untouched; which holds - or is the middle path that rule evaluation treats a stale location's readings as missing (condition false) without any new grammar?",
+          "resolved": true,
+          "blocking": true,
+          "resolution": "user chose to add a proper rule condition (stale leaf); c22 and c16 amended, h11 rejected, c37 captured"
+        }
+      ],
       "links": [],
       "instruction": "",
       "revisions": []
@@ -386,7 +413,25 @@
     {
       "id": "c22",
       "kind": "decision",
-      "text": "Sensor-down stays a notification concern in this scope; it does not become a rule condition and the rules grammar is untouched",
+      "text": "Sensor-down is both a notification concern and a rule condition: a 'stale' leaf joins the rules grammar (decision c36, made after the challenge pass); the compressor safety gates are untouched",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": [
+        {
+          "text": "Sensor-down stays a notification concern in this scope; it does not become a rule condition and the rules grammar is untouched",
+          "kind": "decision",
+          "reason": "user reversed this decision on 2026-09-02 after the h15 contradiction surfaced in /challenge"
+        }
+      ]
+    },
+    {
+      "id": "c23",
+      "kind": "decision",
+      "text": "Health evaluation and report scheduling run inside the collect daemon loop: health after every poll cycle, reports on a clock in the same process; no new systemd units",
       "origin": "user",
       "status": "confirmed",
       "honesty_conditions": [],
@@ -396,9 +441,292 @@
       "revisions": []
     },
     {
-      "id": "c23",
+      "id": "c24",
+      "kind": "requirement",
+      "text": "Collector health is a state distinct from sensor health: when the fleet snapshot fails (cloud unreachable, 401, exhausted 429 retries) or no cycle has run within the threshold, every location is marked unknown rather than down and exactly one 'collector unhealthy' notification fires instead of one alert per sensor. Provenance: sensibo/cli/_commands/collect.py's daemon loop exits on ApiError and systemd restarts it, so a cloud outage stops all readings at once; in the live store the largest gap in the last 14 days (1034s) hit all three locations at the same instant",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h16",
+          "text": "Simulating a cloud outage in tests (client raising ApiError for several cycles) yields one collector notification and zero sensor-down transitions; readings resuming clears it with one recovery",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c25",
+      "kind": "requirement",
+      "text": "Room Sensors are BLE satellites of a parent pod (docs/sensibo-api.md Trap 2; locations.parent_pod_id in the schema): when the parent pod is offline its Room Sensors are marked unknown-parent-down, one alert names the pod, and no child alerts fire; a child going quiet while its parent is alive is the genuine sensor-down case",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h21",
+          "text": "With the parent pod offline in a fixture, its two Room Sensors are marked unknown-parent-down, one notification names the pod, and zero child notifications are sent",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c26",
+      "kind": "requirement",
+      "text": "Alerts are debounced: a location must be past its threshold for a full evaluation and a recovery must hold for at least 2 consecutive cycles before notifying; a per-location cooldown and a daily cap on notifications prevent a flapping sensor from producing dozens of messages. Provenance: the bedroom sensor had 9 gaps over 6h in July 2026 alone",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h22",
+          "text": "A fixture that flips a sensor between reporting and silent every cycle produces at most one down and one recovery notification per cooldown window, and the daily cap is enforced in a test",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c27",
+      "kind": "requirement",
+      "text": "Notification state is persisted, never in-memory: each transition row carries notified_at, and on startup the daemon re-derives current health from the store, so a daemon restart mid-outage cannot re-send a down alert or lose a pending recovery alert - this is what makes honesty condition h4's 'exactly one' true across systemd restarts",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h23",
+          "text": "Killing and restarting the daemon mid-outage in a test sends no second down alert, and the pending recovery still fires once when readings resume",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c28",
+      "kind": "requirement",
+      "text": "The script hook runs as an argv list with no shell, a timeout, and a child environment with SENSIBO_API_KEY and the webhook URL removed; the webhook URL is a secret (a Discord webhook URL grants post rights) and is scrubbed from logs, --json output, and the dry-run preview exactly like the API key (sensibo/api/_scrub.py)",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h24",
+          "text": "The script is invoked with subprocess and an argv list, shell=False, a timeout, and an env lacking SENSIBO_API_KEY and the webhook URL; the dry-run preview and --json output show the URL redacted, verified by tests",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c29",
+      "kind": "requirement",
+      "text": "Report scheduling survives restarts: last_daily_report_at and last_weekly_report_at live in the store meta table, a restart sends at most one missed report per kind, and never a duplicate",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h25",
+          "text": "Restarting the daemon just before and just after the report hour in a clock-controlled test yields exactly one daily report",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c30",
+      "kind": "requirement",
+      "text": "Schema change is a guarded migration: new health, transitions, and notifications tables are created IF NOT EXISTS, SCHEMA_VERSION goes 1 to 2, a binary that finds a newer user_version than it knows fails closed with a remediation instead of silently restamping it, and the batteryVoltage NULL-unit backfill is one idempotent UPDATE in a transaction guarded by a meta flag. Provenance: sensibo/store/_schema.py init_schema stamps PRAGMA user_version = SCHEMA_VERSION unconditionally on every connect, so today an old binary would downgrade a v2 store's version stamp",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h17",
+          "text": "Opening a v2 store with a v1-era init_schema is covered by a test that expects a CliError with a hint, and running the backfill twice changes zero rows the second time",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c31",
+      "kind": "requirement",
+      "text": "The collector records a heartbeat (last_cycle_at, last cycle outcome) in store meta after every cycle; sensibo query health and sensibo doctor show it, and an opt-in daily heartbeat notification tells the operator the watcher itself is alive. Provenance: docs/roadmap.md already requires 'the daemon must be able to tell you when it last ran' and nothing implements it",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h26",
+          "text": "After every cycle meta.last_cycle_at is updated; sensibo query health --json and sensibo doctor both show it, and the opt-in heartbeat notification fires once per day when enabled",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c32",
+      "kind": "requirement",
+      "text": "Staleness has one source of truth: the per-kind thresholds that drive alerts also drive the STALE flag in room list, the web dashboard, and the MCP locations tool, replacing the 24h DEFAULT_STALE_AFTER_HOURS default so a sensor never reads fresh on the dashboard while an alert has fired",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h27",
+          "text": "room list, the dashboard, and the MCP locations tool derive STALE from the same threshold config the alerter uses; a test asserts they agree for a location just past threshold",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c33",
+      "kind": "boundary",
+      "text": "Store.prune (default 730 days) keeps deleting readings only; health transitions and notification records are not pruned by it and keep their own, longer retention so an outage history outlives the raw readings it was derived from",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h28",
+          "text": "Store.prune with the default window deletes readings older than 730 days and leaves the health, transitions, and notifications tables untouched, asserted by a test",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c34",
+      "kind": "assumption",
+      "text": "Down threshold default is about 15 minutes (10 missed 91s cycles) for pods and Room Sensors alike: a read-only probe of the live store over the last 14 days shows p50 = p90 = 91s and p99 = 132s inter-reading intervals for all three locations, so cadence does not differ by kind",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h29",
+          "text": "The default threshold is a named constant documented as measured (91s cadence probe, 2026-09-02) and overridable in config; alerts fire only after it elapses",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c35",
+      "kind": "before_state",
+      "text": "Both Room Sensors were down at once and came back together: the bedroom sensor (ms_kDup7cVx) was silent 2026-08-02 23:00 to 2026-09-02 07:51 (about 30 days) and the spare-room sensor since 2026-02-10, and both resumed within two minutes of each other this morning - a parent-pod or BLE-side cause is at least as likely as two battery deaths, and the pod itself had 12 gaps over 30 minutes in the last 60 days, several shared with the bedroom sensor to the minute (collector or cloud outages). Nothing distinguished these cases and nothing notified",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h18",
+          "text": "The three outage classes - single sensor, all children of one pod, all locations at once - are each reproducible from the live store's gap history and each maps to a distinct health state in the delivered design",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c36",
       "kind": "decision",
-      "text": "Health evaluation and report scheduling run inside the collect daemon loop: health after every poll cycle, reports on a clock in the same process; no new systemd units",
+      "text": "Sensor-down becomes a proper rule condition: a new 'stale' leaf type in the rules grammar, true when a location's health is down or unknown; this supersedes the earlier notification-only decision (c22) after the challenge pass surfaced the h15 contradiction",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c37",
+      "kind": "requirement",
+      "text": "The rules grammar gains exactly one leaf: {type: stale, location: <name>, [after_seconds]} - true when the named location's persisted health is down or unknown (default threshold from the health config); rule dry-run output shows the stale evaluation like any other leaf, and the compressor safety gates are unchanged",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h19",
+          "text": "A rule with a stale leaf on a location that stopped reporting evaluates true in dry-run within the threshold, false again after recovery, and tests/test_rules_engine.py covers both; the hysteresis and rate-limit tests are unchanged",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c38",
+      "kind": "decision",
+      "text": "First run after upgrade: initial health evaluation seeds state and sends one alert per location already past its threshold, so existing outages are announced immediately",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c39",
+      "kind": "decision",
+      "text": "Reports are written to ~/.sensibo/reports/ as SVG, served by the web dashboard, and the notification payload carries the file path and dashboard URL; the script hook may upload the file itself. No multipart upload from sensibo",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
+    },
+    {
+      "id": "c40",
+      "kind": "decision",
+      "text": "Report clock: daily at 07:00 host-local, weekly Monday 07:00 host-local, both configurable",
       "origin": "user",
       "status": "confirmed",
       "honesty_conditions": [],
@@ -430,6 +758,24 @@
     {
       "id": "v3",
       "text": "Who watches the watcher: if the collect daemon itself dies no down-alert can fire; systemd Restart=always covers crashes but not a powered-off host",
+      "kind": "unknown_nonblocking",
+      "claim_id": null,
+      "resolved": false,
+      "resolution": "",
+      "resolution_claim_id": null
+    },
+    {
+      "id": "v4",
+      "text": "batteryVoltage is quantized: all 352 bedroom readings in the last 14 days are exactly 3000 mV, so the value may sit flat and then cliff, and a low-voltage warning threshold could never trigger before the sensor dies - the warning may need to be 'voltage dropped below 3000 at all' plus the down alert as the real signal",
+      "kind": "unknown_nonblocking",
+      "claim_id": null,
+      "resolved": false,
+      "resolution": "",
+      "resolution_claim_id": null
+    },
+    {
+      "id": "v5",
+      "text": "Two writers on one sqlite file: the collect daemon, the web server's POST handlers, MCP, and a manual 'notify test --apply' all open the store with sqlite3.connect's default 5s busy timeout and WAL; whether a manual write can collide with a daemon cycle under load is untested",
       "kind": "unknown_nonblocking",
       "claim_id": null,
       "resolved": false,
@@ -545,8 +891,125 @@
       "seeds": [
         "c12"
       ]
+    },
+    {
+      "id": "s13",
+      "surface": "challenge pass / failure-mode lens: sensibo/cli/_commands/collect.py daemon loop + sensibo/api/client.py 429 backoff + live store 14-day gap probe",
+      "finding": "an ApiError ends the daemon (exit 2, systemd Restart=always); there is no per-cycle failure record, so during a cloud or key outage every location would look stale simultaneously - the 1034s gap common to all three locations today is exactly that signature",
+      "seeds": [
+        "c24"
+      ]
+    },
+    {
+      "id": "s14",
+      "surface": "challenge pass / adjacent-systems lens: sensibo/store/_schema.py parent_pod_id + docs/sensibo-api.md Trap 2",
+      "finding": "the hierarchy is already modelled but nothing in the exported spec uses it for health; without it a pod outage fans out into N alerts",
+      "seeds": [
+        "c25"
+      ]
+    },
+    {
+      "id": "s15",
+      "surface": "challenge pass / failure-mode lens: live store gap history for ms_kDup7cVx",
+      "finding": "flapping is real on this fleet, so an un-debounced alert path would have produced 18 messages in one month from one sensor",
+      "seeds": [
+        "c26"
+      ]
+    },
+    {
+      "id": "s16",
+      "surface": "challenge pass / lifecycle lens: systemd Restart=always in sensibo/service + h4 'exactly one notification'",
+      "finding": "h4 is only satisfiable if dedupe state lives in sqlite; the spec's health table instruction on c4 did not say where notified state lives",
+      "seeds": [
+        "c27"
+      ]
+    },
+    {
+      "id": "s17",
+      "surface": "challenge pass / security lens: sensibo/api/_scrub.py + sensibo/api/_auth.py (~/.sensibo/.env, chmod 600) + the c5 instruction",
+      "finding": "the c5 instruction says scrub the URL from logs but the dry-run preview prints 'what it would send', which would leak the URL to a terminal or an agent transcript; the child process inherits the API key unless stripped",
+      "seeds": [
+        "c28"
+      ]
+    },
+    {
+      "id": "s18",
+      "surface": "challenge pass / lifecycle lens: sensibo/store/_schema.py meta table + collect daemon loop",
+      "finding": "the loop has no clock state; with in-daemon scheduling (decision c23) a restart at 06:59 and 07:01 would double-send or skip unless the last-sent instant is persisted",
+      "seeds": [
+        "c29"
+      ]
+    },
+    {
+      "id": "s19",
+      "surface": "challenge pass / migration lens: sensibo/store/_schema.py init_schema + pragma user_version=1 on the live store",
+      "finding": "every process (collect, web, mcp, query) calls init_schema on connect; the unconditional version stamp is the concrete downgrade hazard for a mixed-version window during upgrade",
+      "seeds": [
+        "c30"
+      ]
+    },
+    {
+      "id": "s20",
+      "surface": "challenge pass / observability lens: docs/roadmap.md 'daemon must tell you when it last ran' + doctor command",
+      "finding": "an unmet standing requirement that also bounds the parked 'who watches the watcher' unknown",
+      "seeds": [
+        "c31"
+      ]
+    },
+    {
+      "id": "s21",
+      "surface": "challenge pass / adjacent-systems lens: sensibo/store/rooms.py DEFAULT_STALE_AFTER_HOURS + sensibo/web/_wire.py + sensibo/mcp_server/_tools.py",
+      "finding": "three read surfaces hardcode the 24h default via parameter defaults; leaving them makes dashboard and alerts disagree",
+      "seeds": [
+        "c32"
+      ]
+    },
+    {
+      "id": "s22",
+      "surface": "challenge pass / data-flow lens: sensibo/store/store.py prune + DELETE_OLDER_THAN_SQL",
+      "finding": "prune targets the readings table by timestamp; new tables need an explicit retention decision or they are implicitly forever",
+      "seeds": [
+        "c33"
+      ]
+    },
+    {
+      "id": "s23",
+      "surface": "challenge pass / cheap-probe lens: ~/.sensibo/sensibo.db inter-reading intervals, last 14 days, read-only",
+      "finding": "cadence is uniform at 91s across pod and Room Sensors (n=13363 pod, 351/353 sensors); this replaces the per-kind-threshold guess in c10 with a measured default",
+      "seeds": [
+        "c34"
+      ]
+    },
+    {
+      "id": "s24",
+      "surface": "challenge pass / concurrency lens: sensibo/store/store.py connect (WAL, default timeout) + sensibo/web/server.py per-request Store() + sensibo/mcp_server/_tools.py",
+      "finding": "every reader opens its own connection per request; WAL isolates readers from the single daemon writer; a second writer is the untested case (parked)",
+      "seeds": []
+    },
+    {
+      "id": "s25",
+      "surface": "challenge pass / counter-evidence lens: ~/.sensibo/sensibo.db gap history >30min, last 60 days, all locations (read-only)",
+      "finding": "bedroom sensor down 30 days (08-02 to 09-02), both sensors recovered simultaneously at 07:49-07:51, pod gaps shared to the minute with the bedroom sensor; corrects s4, which called the bedroom sensor flapping because only the first six of its gaps were printed",
+      "seeds": [
+        "c35",
+        "c25",
+        "c24"
+      ]
     }
   ],
-  "lapses": [],
+  "lapses": [
+    {
+      "id": "l1",
+      "code": "assumption-for-measurement",
+      "what": "Scope entry s4 characterised the bedroom sensor as 'flapping (9 gaps >6h in July)' from a truncated gap list; the full list shows a 30-day outage in August that s4 and c12 omit",
+      "skipped_check": "print every gap per location, not the first six",
+      "refs": [
+        "s4",
+        "c12"
+      ],
+      "origin": "llm",
+      "status": "approved"
+    }
+  ],
   "obligations": []
 }
