@@ -25,6 +25,7 @@ import pytest
 
 import sensibo.api.client as client_module
 import sensibo.cli._commands.collect as collect_cmd
+import sensibo.collect.collector as collector_module
 from sensibo.api import GatedHistoryWindowError
 from sensibo.api.client import SensiboClient
 from sensibo.cli import main
@@ -38,7 +39,23 @@ from sensibo.collect import (
     Collector,
     CycleResult,
 )
+from sensibo.notify import NotifyConfig
 from sensibo.store import KIND_POD, KIND_ROOM_SENSOR, Store
+
+
+@pytest.fixture(autouse=True)
+def _never_the_real_notify_transport(monkeypatch):
+    """No test in this module may resolve the operator's real notify config.
+
+    Every cycle now runs the health engine, and a stale fixture timestamp is a
+    genuine "down" — so without this seam a suite run on the operator's own
+    machine would POST to their live webhook.
+    """
+    monkeypatch.setattr(collect_cmd, "build_notifier", lambda: lambda payload: [])
+    # …and the engine tests below construct a Collector with the default
+    # notifier, so neutralise the config it would resolve too.
+    monkeypatch.setattr(collector_module, "resolve_notify_config", lambda *a, **k: NotifyConfig())
+
 
 # --- sample fleet data ----------------------------------------------------
 

@@ -17,12 +17,26 @@ unit-testable against a fake client and a ``tmp_path`` store.
 from __future__ import annotations
 
 import datetime
+import json
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from sensibo.api import GatedHistoryWindowError
+from sensibo.api import ApiError, GatedHistoryWindowError, scrub_text
+from sensibo.health import (
+    STATUS_DOWN,
+    STATUS_OK,
+    CollectorOutcome,
+    EvaluationResult,
+    HealthConfig,
+    HealthState,
+    Notification,
+    Observation,
+    evaluate,
+    iso8601,
+)
+from sensibo.notify import Payload, resolve_notify_config, send
 from sensibo.store import KIND_POD, KIND_ROOM_SENSOR, Store
 
 #: Cadence defaults for the daemon. ``MIN_INTERVAL`` is Home Assistant's
@@ -39,30 +53,90 @@ BACKFILL_WINDOWS: tuple[int, ...] = (730, 365, 90, 30, 7, 1)
 #: Store meta keys the collector owns.
 META_BACKFILL_DONE = "backfill_done"
 META_BACKFILL_WINDOW = "backfill_window_days"
+#: When the last cycle ran (epoch seconds, ``repr``-formatted).
+META_LAST_CYCLE_AT = "last_cycle_at"
+#: ``"ok"`` or ``"failed: <redacted reason>"`` — the last cycle's verdict.
+META_LAST_CYCLE_OUTCOME = "last_cycle_outcome"
+#: ``"1"``/``"0"``: the last cycle's collector verdict, fed back to
+#: :func:`sensibo.health.evaluate` as ``collector_previous_ok`` so the
+#: collector-level notifications stay edge-triggered across a restart.
+META_COLLECTOR_OK = "collector_ok"
+#: JSON blob of the :class:`~sensibo.health.HealthState` fields the store's
+#: ``health`` table has no column for (``ok_streak``, ``last_notified_at``,
+#: ``notifications_today``, ``day_key``), keyed by location id. Without these
+#: a restart would forget the cooldown and re-announce an open outage.
+META_HEALTH_EXTRA = "health_state_extra"
+#: JSON list of notifications whose delivery failed and are still owed. A
+#: transition with ``notified_at`` NULL is owed *only* if it had a
+#: notification to begin with (most transitions — seeding, parent-sheltered
+#: children — never notify), so the debt is queued explicitly rather than
+#: inferred from every un-stamped row.
+META_HEALTH_OWED = "health_owed"
+
+#: Hard ceiling on the owed queue, so a long transport outage cannot grow the
+#: meta blob without bound; the oldest entries are dropped first.
+MAX_OWED = 50
 
 #: A no-op logger; the CLI passes one that writes to stderr.
 Logger = Callable[[str], None]
+
+#: A notify transport: takes a payload, returns one outcome per transport.
+#: Injectable so tests never resolve the operator's real notify config.
+Notifier = Callable[[Payload], Sequence[Any]]
 
 
 def _noop(_message: str) -> None:  # pragma: no cover - trivial default
     return None
 
 
+def default_notifier(payload: Payload) -> Sequence[Any]:
+    """Deliver through :mod:`sensibo.notify` with the operator's resolved config.
+
+    Resolved per call rather than cached, so an operator can add a webhook to
+    ``~/.sensibo/.env`` without restarting the daemon. :func:`sensibo.notify.send`
+    never raises — a flaky webhook must not take down the cycle that detected
+    the outage.
+    """
+    return send(payload, resolve_notify_config())
+
+
 @dataclass(frozen=True)
 class CycleResult:
-    """The tally from one :meth:`Collector.run_cycle`."""
+    """The tally from one :meth:`Collector.run_cycle`.
+
+    The ``health_*`` counts are over the *whole* persisted health map, not just
+    the locations this cycle saw — a location the snapshot omitted still has an
+    open outage. ``health_unknown`` folds ``unknown`` and
+    ``unknown_parent_down`` together: both mean "nothing can be said", which is
+    what a summary line needs to convey.
+    """
 
     locations_seen: int
     pods: int
     room_sensors: int
     readings_written: int
+    health_ok: int = 0
+    health_down: int = 0
+    health_unknown: int = 0
+    notifications_sent: int = 0
+    notifications_suppressed: int = 0
 
-    def to_dict(self) -> dict[str, int]:
+    def health_dict(self) -> dict[str, int]:
+        return {
+            "ok": self.health_ok,
+            "down": self.health_down,
+            "unknown": self.health_unknown,
+            "notifications_sent": self.notifications_sent,
+            "notifications_suppressed": self.notifications_suppressed,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
         return {
             "locations_seen": self.locations_seen,
             "pods": self.pods,
             "room_sensors": self.room_sensors,
             "readings_written": self.readings_written,
+            "health": self.health_dict(),
         }
 
 
@@ -110,28 +184,44 @@ class Collector:
         *,
         windows: Sequence[int] = BACKFILL_WINDOWS,
         log: Logger | None = None,
+        notifier: Notifier | None = None,
+        health_config: HealthConfig | None = None,
     ) -> None:
         self._client = client
         self._store = store
         self._windows = tuple(windows)
         self._log = log or _noop
+        self._notifier: Notifier = notifier or default_notifier
+        self._health_config = health_config or HealthConfig()
 
     # -- one cycle ---------------------------------------------------------
 
     def run_cycle(self, *, now: float | None = None) -> tuple[CycleResult, list]:
-        """Poll the whole fleet once and persist every reported reading.
+        """Poll the whole fleet once, persist every reading, and judge health.
 
         Exactly one ``fleet_snapshot()`` call. Returns the tally and the raw
         pod records — the caller reuses those records for backfill so no second
         network round-trip is needed.
+
+        A failed poll is still a *cycle*: the failure is recorded, the health
+        engine is run with a failed :class:`~sensibo.health.CollectorOutcome`
+        (so every location goes ``unknown`` rather than a fleet-wide false
+        "down" alarm), and only then is the :class:`~sensibo.api.ApiError`
+        re-raised for the caller to decide about — ``--once`` exits 2, the
+        daemon logs and keeps its cadence.
         """
         wall = time.time() if now is None else now
-        snapshot = self._client.fleet_snapshot()
+        try:
+            snapshot = self._client.fleet_snapshot()
+        except ApiError as err:
+            self._finish_cycle(wall, ok=False, error=str(err), observations=())
+            raise
         pods = _extract_pods(snapshot)
 
         pod_count = 0
         room_count = 0
         readings = 0
+        observations: list[Observation] = []
         for pod in pods:
             if not isinstance(pod, Mapping):
                 continue
@@ -147,25 +237,37 @@ class Collector:
                 seen_at=_seen_at(pod.get("measurements"), wall),
             )
             pod_count += 1
+            observations.append(_observe(pod, pod_id, KIND_POD, None))
             readings += self._record_measurements(
                 pod_id, pod.get("measurements"), product_model, wall
             )
             sensors_seen, sensor_readings = self._record_room_sensors(
-                pod_id, pod.get("motionSensors"), wall
+                pod_id, pod.get("motionSensors"), wall, observations
             )
             room_count += sensors_seen
             readings += sensor_readings
 
+        evaluation, sent = self._finish_cycle(wall, ok=True, error=None, observations=observations)
+        ok_count, down_count, unknown_count = _health_counts(evaluation.states)
         result = CycleResult(
             locations_seen=pod_count + room_count,
             pods=pod_count,
             room_sensors=room_count,
             readings_written=readings,
+            health_ok=ok_count,
+            health_down=down_count,
+            health_unknown=unknown_count,
+            notifications_sent=sent,
+            notifications_suppressed=evaluation.suppressed_count,
         )
         return result, pods
 
     def _record_room_sensors(
-        self, parent_pod_id: str, motion_sensors: Any, wall: float
+        self,
+        parent_pod_id: str,
+        motion_sensors: Any,
+        wall: float,
+        observations: list[Observation] | None = None,
     ) -> tuple[int, int]:
         """Persist each Room Sensor nested under a parent pod.
 
@@ -193,6 +295,8 @@ class Collector:
                 room_name=_room_name(sensor),
                 seen_at=_seen_at(sensor.get("measurements"), wall),
             )
+            if observations is not None:
+                observations.append(_observe(sensor, sensor_id, KIND_ROOM_SENSOR, parent_pod_id))
             readings += self._record_measurements(
                 sensor_id, sensor.get("measurements"), model, wall
             )
@@ -217,6 +321,185 @@ class Collector:
         # BEFORE storage (docs/sensibo-api.md, "Trap 1: pm25 is polymorphic").
         self._store.record_readings(location_id, fields, timestamp=ts, product_model=product_model)
         return len(fields)
+
+    # -- health: evaluate, persist, alert ----------------------------------
+
+    def load_health_states(self) -> dict[str, HealthState]:
+        """Rebuild the health map from the store — the restart-safe read.
+
+        The ``health`` table holds the columns an operator queries (status,
+        since, last_ok, parent); the debounce fields live alongside it in the
+        :data:`META_HEALTH_EXTRA` blob. Loading from the store rather than from
+        an in-memory map is what makes "exactly one alert per outage" survive a
+        daemon restart.
+        """
+        extras = self._load_json(META_HEALTH_EXTRA, {})
+        states: dict[str, HealthState] = {}
+        for record in self._store.list_health():
+            extra = extras.get(record.location_id) or {}
+            states[record.location_id] = HealthState(
+                location_id=record.location_id,
+                status=record.status,
+                since=record.since,
+                last_ok=record.last_ok,
+                parent_pod_id=record.parent_pod_id,
+                ok_streak=int(extra.get("ok_streak", 0) or 0),
+                last_notified_at=extra.get("last_notified_at"),
+                notifications_today=int(extra.get("notifications_today", 0) or 0),
+                day_key=extra.get("day_key"),
+            )
+        return states
+
+    def _finish_cycle(
+        self,
+        wall: float,
+        *,
+        ok: bool,
+        error: str | None,
+        observations: Sequence[Observation],
+    ) -> tuple[EvaluationResult, int]:
+        """Run the health engine for this cycle and persist everything it says."""
+        self._retry_owed(wall)
+        previous = self.load_health_states()
+        evaluation = evaluate(
+            previous,
+            observations,
+            CollectorOutcome(ok=ok, error=error),
+            wall,
+            self._health_config,
+            self._collector_previous_ok(),
+        )
+        self._persist_states(evaluation.states)
+        reason = scrub_text(error or "the fleet snapshot failed")
+        self._store.set_meta(META_LAST_CYCLE_AT, repr(wall))
+        self._store.set_meta(META_LAST_CYCLE_OUTCOME, "ok" if ok else f"failed: {reason}")
+        self._store.set_meta(META_COLLECTOR_OK, "1" if evaluation.collector_ok else "0")
+        sent = self._dispatch(evaluation, wall)
+        return evaluation, sent
+
+    def _collector_previous_ok(self) -> bool | None:
+        raw = self._store.get_meta(META_COLLECTOR_OK)
+        if raw is None:
+            return None
+        return raw == "1"
+
+    def _persist_states(self, states: Mapping[str, HealthState]) -> None:
+        extras: dict[str, dict[str, Any]] = {}
+        for location_id, state in states.items():
+            self._store.set_health(
+                location_id,
+                status=state.status,
+                since=state.since,
+                last_ok=state.last_ok,
+                parent_pod_id=state.parent_pod_id,
+            )
+            extras[location_id] = {
+                "ok_streak": state.ok_streak,
+                "last_notified_at": state.last_notified_at,
+                "notifications_today": state.notifications_today,
+                "day_key": state.day_key,
+            }
+        self._store.set_meta(META_HEALTH_EXTRA, json.dumps(extras, sort_keys=True))
+
+    def _dispatch(self, evaluation: EvaluationResult, wall: float) -> int:
+        """Persist every transition, then try to deliver every notification.
+
+        Order matters: the transition row exists *before* its alert is
+        attempted, so a crash between the two leaves an owed transition rather
+        than an alert nobody can trace. ``notified_at`` is stamped only once a
+        transport actually accepted the message.
+        """
+        transition_ids: dict[str, int] = {}
+        for transition in evaluation.transitions:
+            transition_ids[transition.location_id] = self._store.record_transition(
+                transition.location_id,
+                transition.from_status,
+                transition.to_status,
+                transition.at,
+            )
+
+        sent = 0
+        owed = self._load_json(META_HEALTH_OWED, [])
+        for note in evaluation.notifications:
+            payload = _payload_for(note, evaluation.states.get(note.location_id or ""))
+            transition_id = (
+                transition_ids.get(note.location_id) if note.location_id is not None else None
+            )
+            if self._deliver(payload, note.kind, note.location_id, wall):
+                sent += 1
+                if transition_id is not None:
+                    self._store.mark_transition_notified(transition_id, wall)
+            else:
+                owed.append(
+                    {
+                        "kind": note.kind,
+                        "location_id": note.location_id,
+                        "transition_id": transition_id,
+                        "payload": _payload_dict(payload),
+                    }
+                )
+        self._save_owed(owed)
+        return sent
+
+    def _retry_owed(self, wall: float) -> int:
+        """Retry undelivered notifications once, before this cycle is judged."""
+        owed = self._load_json(META_HEALTH_OWED, [])
+        if not owed:
+            return 0
+        remaining: list[dict[str, Any]] = []
+        delivered = 0
+        for entry in owed:
+            payload = _payload_from_dict(entry.get("payload"))
+            if payload is None:
+                continue  # unreadable entry: drop it rather than retry forever
+            if self._deliver(payload, entry.get("kind", ""), entry.get("location_id"), wall):
+                delivered += 1
+                transition_id = entry.get("transition_id")
+                if transition_id is not None:
+                    self._store.mark_transition_notified(int(transition_id), wall)
+            else:
+                remaining.append(entry)
+        self._save_owed(remaining)
+        return delivered
+
+    def _deliver(self, payload: Payload, kind: str, location_id: str | None, wall: float) -> bool:
+        """Hand one payload to the transport; record every attempt's outcome."""
+        try:
+            outcomes = self._notifier(payload)
+        except Exception as exc:  # pragma: no cover - a transport must not raise
+            self._store.record_notification(
+                kind=kind,
+                location_id=location_id,
+                sent_at=wall,
+                transport="unknown",
+                outcome=f"failed: {scrub_text(str(exc))}",
+            )
+            return False
+        succeeded = False
+        for outcome in outcomes or ():
+            ok = bool(getattr(outcome, "ok", False))
+            succeeded = succeeded or ok
+            self._store.record_notification(
+                kind=kind,
+                location_id=location_id,
+                sent_at=wall,
+                transport=str(getattr(outcome, "transport", "unknown")),
+                outcome=("delivered" if ok else f"failed: {getattr(outcome, 'detail', 'unknown')}"),
+            )
+        return succeeded
+
+    def _load_json(self, key: str, default: Any) -> Any:
+        raw = self._store.get_meta(key)
+        if not raw:
+            return default
+        try:
+            return json.loads(raw)
+        except ValueError:  # pragma: no cover - a corrupt blob is not fatal
+            return default
+
+    def _save_owed(self, owed: Sequence[Any]) -> None:
+        trimmed = list(owed)[-MAX_OWED:]
+        self._store.set_meta(META_HEALTH_OWED, json.dumps(trimmed, sort_keys=True))
 
     # -- first-run backfill -----------------------------------------------
 
@@ -324,6 +607,94 @@ def _extract_result(data: Any) -> Any:
     if isinstance(data, Mapping) and "result" in data:
         return data["result"]
     return data
+
+
+def _observe(obj: Mapping, location_id: str, kind: str, parent_pod_id: str | None) -> Observation:
+    """Build this cycle's health observation for one location.
+
+    ``last_reading_at`` is the location's **own** ``measurements.time.time``,
+    never the poll instant, and ``None`` when it reports no time at all — a
+    location in the fleet with no reading behind it is exactly the
+    battery-dead case, and stamping "now" would hide it forever.
+    """
+    return Observation(
+        location_id=location_id,
+        kind=kind,
+        parent_pod_id=parent_pod_id,
+        last_reading_at=_own_reading_at(obj.get("measurements")),
+        is_alive=_is_alive(obj.get("connectionStatus")),
+    )
+
+
+def _own_reading_at(measurements: Any) -> float | None:
+    if not isinstance(measurements, Mapping):
+        return None
+    marker = measurements.get("time")
+    iso: Any = marker.get("time") if isinstance(marker, Mapping) else marker
+    return _parse_iso8601(iso)
+
+
+def _is_alive(connection_status: Any) -> bool | None:
+    """``connectionStatus.isAlive``, or ``None`` when the snapshot doesn't say."""
+    if not isinstance(connection_status, Mapping):
+        return None
+    value = connection_status.get("isAlive")
+    return bool(value) if isinstance(value, bool) else None
+
+
+def _health_counts(states: Mapping[str, HealthState]) -> tuple[int, int, int]:
+    """``(ok, down, unknown)`` over the whole persisted health map."""
+    ok = down = unknown = 0
+    for state in states.values():
+        if state.status == STATUS_OK:
+            ok += 1
+        elif state.status == STATUS_DOWN:
+            down += 1
+        else:
+            unknown += 1
+    return ok, down, unknown
+
+
+def _payload_for(note: Notification, state: HealthState | None) -> Payload:
+    """Render one notification as the JSON document a transport receives."""
+    if state is not None:
+        status = state.status
+        since = iso8601(state.since)
+        last_ok = iso8601(state.last_ok)
+    else:
+        status = "unknown"
+        since = iso8601(note.at)
+        last_ok = iso8601(None)
+    return Payload(
+        kind=note.kind,
+        location=note.location_id or "collector",
+        status=status,
+        since=since,
+        last_ok=last_ok,
+        message=note.message,
+        execution=note.execution,
+    )
+
+
+def _payload_dict(payload: Payload) -> dict[str, str]:
+    return {
+        "kind": payload.kind,
+        "location": payload.location,
+        "status": payload.status,
+        "since": payload.since,
+        "last_ok": payload.last_ok,
+        "message": payload.message,
+        "execution": payload.execution,
+    }
+
+
+def _payload_from_dict(data: Any) -> Payload | None:
+    if not isinstance(data, Mapping):
+        return None
+    try:
+        return Payload(**{key: str(value) for key, value in data.items()})
+    except TypeError:  # pragma: no cover - an unreadable queued entry
+        return None
 
 
 def _room_name(obj: Mapping) -> str | None:
