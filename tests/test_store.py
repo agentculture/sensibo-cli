@@ -28,7 +28,7 @@ from sensibo.store import (
 # --- fixtures ---------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def store(tmp_path: Path) -> Store:
     s = Store(db_path=tmp_path / "sensibo.db")
     yield s
@@ -507,3 +507,32 @@ def test_store_package_is_stdlib_only() -> None:
                 continue
             unexpected = mods - allowed_top_level
             assert not unexpected, f"{path} imports non-stdlib module(s): {unexpected}"
+
+
+# --- deviation d1: batched writes ------------------------------------------
+
+
+def test_record_readings_is_one_transaction_and_record_series_bulk_inserts(tmp_path):
+    import time as _time
+
+    store = Store(db_path=tmp_path / "bulk.db")
+    store.upsert_location("pod-1", kind="pod", product_model="airq")
+    # record_readings: one commit per call, every field lands.
+    store.record_readings("pod-1", {"temperature": 21.5, "humidity": 44}, timestamp=1_700_000_000)
+    latest = store.latest_readings("pod-1")
+    assert {latest["temperature"].value, latest["humidity"].value} == {21.5, 44.0}
+    # record_series: 6720 points (7 days at 90s) in well under a second.
+    points = [(1_700_000_000 + i * 90, 20.0 + (i % 7)) for i in range(6720)]
+    started = _time.perf_counter()
+    written = store.record_series("pod-1", "co2", points)
+    elapsed = _time.perf_counter() - started
+    assert written == 6720
+    assert elapsed < 2.0, f"record_series took {elapsed:.2f}s"
+    rows = store.query_range("pod-1", "co2")
+    assert len(rows) == 6720
+    assert rows[0].unit == "ppm"
+    # idempotent: re-recording the same points upserts, never duplicates.
+    assert store.record_series("pod-1", "co2", points) == 6720
+    assert len(store.query_range("pod-1", "co2")) == 6720
+    assert store.record_series("pod-1", "co2", []) == 0
+    store.close()

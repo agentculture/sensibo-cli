@@ -69,9 +69,11 @@ def _build_parser() -> argparse.ArgumentParser:
     from sensibo.cli._commands import explain as _explain_cmd
     from sensibo.cli._commands import learn as _learn_cmd
     from sensibo.cli._commands import mcp as _mcp_group
+    from sensibo.cli._commands import notify as _notify_group
     from sensibo.cli._commands import overview as _overview_cmd
     from sensibo.cli._commands import query as _query_group
     from sensibo.cli._commands import read as _read_cmd
+    from sensibo.cli._commands import report as _report_group
     from sensibo.cli._commands import room as _room_group
     from sensibo.cli._commands import rule as _rule_group
     from sensibo.cli._commands import schedule as _schedule_group
@@ -112,8 +114,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _cli_group.register(sub)
     _devices_cmd.register(sub)
     _mcp_group.register(sub)
+    _notify_group.register(sub)
     _query_group.register(sub)
     _read_cmd.register(sub)
+    _report_group.register(sub)
     _room_group.register(sub)
     _rule_group.register(sub)
     _schedule_group.register(sub)

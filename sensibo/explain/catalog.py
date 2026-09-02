@@ -120,12 +120,19 @@ _DOCTOR = """\
 
 Checks the agent-identity invariants `steward doctor` verifies:
 prompt-file-present and backend-consistency (`colleague` → `AGENTS.colleague.md`), plus a
-skills-present check. Exits 1 when unhealthy.
+skills-present check and a `collector_heartbeat` check (reads the
+`last_cycle_at` / `last_cycle_outcome` meta keys `sensibo collect` writes each
+cycle; unhealthy once the heartbeat is older than 3x the poll interval, or
+absent). Only the identity checks (`prompt_file_present`,
+`backend_consistency`) gate the exit code; `skills_present` and
+`collector_heartbeat` are warnings that report themselves honestly without
+flipping it. Exits 1 when an identity check is unhealthy.
 
 ## Usage
 
     sensibo doctor
     sensibo doctor --json
+    sensibo doctor --db /path/to/sensibo.db
 """
 
 _COLLECT = """\
@@ -228,6 +235,9 @@ pointing at `sensibo collect` — that is the verb that populates what
   both ends.
 - `sensibo query locations` — every known sensing location (pod or Room
   Sensor) with kind, model, room name, alias (if set), and last-seen.
+- `sensibo query health [LOCATION] [--since ISO8601]` — sensor health: current
+  status, since, last_ok, and outage (transition) history. See
+  `sensibo explain query health`.
 
 ## Usage
 
@@ -235,9 +245,136 @@ pointing at `sensibo collect` — that is the verb that populates what
     sensibo query latest pod-abc123 --field temperature
     sensibo query range pod-abc123 --field temperature --since 2026-01-01 --json
     sensibo query locations --json
+    sensibo query health --json
     sensibo query latest --db /path/to/sensibo.db
 """
 
+
+_QUERY_HEALTH = """\
+# sensibo query health [LOCATION]
+
+Sensor health from the local store, **offline only**: current status
+(`ok` / `down` / `unknown` / `unknown_parent_down`), `since` (when it entered
+that status), `last_ok` (last known-good instant, or `never`), the raw
+transition log, and a computed `outages` list — closed `down` -> `ok` pairs
+with `start`, `end`, and `duration_seconds`. All timestamps render as ISO
+8601 UTC. Health rows are written by `sensibo collect`'s per-cycle evaluation
+(see `sensibo/health/`); an empty `health` table means no cycle has run yet,
+same remediation as every other empty-store `query` error.
+
+`LOCATION` (optional) resolves like every other location argument in this
+CLI: stable id, operator alias, or Sensibo room name
+(`sensibo.store.rooms.resolve_location`). Omit it to see every location.
+`--since` narrows the transition log to an inclusive lower bound.
+
+The response also carries `collector: {last_cycle_at, last_cycle_outcome}` —
+the same heartbeat `sensibo doctor`'s `collector_heartbeat` check reads — and
+the local-execution marker (`execution: local (stops when this daemon
+stops)`): health tracking only runs while `sensibo collect` is running.
+
+## Usage
+
+    sensibo query health --json
+    sensibo query health "Living Room"
+    sensibo query health pod-abc123 --since 2026-09-01T00:00:00Z --json
+"""
+
+_NOTIFY = """\
+# sensibo notify
+
+Send (or preview) a test notification through the configured transport(s) —
+`SENSIBO_NOTIFY_WEBHOOK` and/or `SENSIBO_NOTIFY_SCRIPT` (environment, else
+`~/.sensibo/.env`) — the same transports `sensibo collect`'s health alerting
+uses. Lets an operator verify delivery works without waiting for a real
+sensor-down event.
+
+**Dry-run by default**, like every write verb in this project: without
+`--apply`, `notify test` prints the exact redacted payload (`kind: "test"`)
+and the transport(s) it would send to, and calls the transport **zero**
+times. `--apply` sends it — exactly once per configured transport — and
+prints each transport's outcome.
+
+With no transport configured: the dry-run preview says so and exits 0 (there
+is nothing broken, just nothing to test); `--apply` with nothing configured
+is a user error (exit 1) whose remediation names both env vars.
+
+Every response — text and `--json` — carries `execution: local (stops when
+this daemon stops)`: notifications only fire while this machine's collector
+is running, unlike Sensibo's own cloud automation (`smartmode`, `schedule`,
+`timer`).
+
+## Verbs
+
+- `sensibo notify test [--apply]` — preview (default) or send a test
+  notification.
+- `sensibo notify overview` — describe this noun.
+
+## Usage
+
+    sensibo notify test                 # dry-run preview, nothing sent
+    sensibo notify test --json          # dry-run preview, --json
+    sensibo notify test --apply         # sends, exactly once per transport
+    sensibo notify overview --json
+"""
+
+_REPORT = """\
+# sensibo report
+
+Render an offline, self-contained SVG report straight from the local store —
+one panel per (location, numeric field) pair, no network access, no external
+assets, no JavaScript (`sensibo.report.render_report`, task t4). `daily`
+covers the trailing 24 hours; `weekly` the trailing 7 days.
+
+**Dry-run by default**, like every write verb in this project: without
+`--out` or `--apply`, prints where the report *would* be written
+(`SENSIBO_REPORTS_DIR`, else `~/.sensibo/reports`) and the redacted
+transport(s) it would notify, and writes nothing. `--out PATH` writes the
+rendered SVG to `PATH` — allowed without `--apply`, the same as any verb that
+takes an explicit output path. `--apply` writes into the reports directory,
+records the last-sent instant so the in-daemon scheduler (`sensibo collect
+--daemon`) treats this run as satisfying that kind's next due check, and
+delivers a notification — a small JSON message naming the file path (plus a
+dashboard link when `SENSIBO_DASHBOARD_URL` is set), **never a file upload** —
+through the configured transport(s), exactly once.
+
+**In-daemon scheduling.** `sensibo collect --daemon` runs the same scheduler
+after every poll cycle (success or failure): `SENSIBO_REPORT_DAILY_AT` /
+`SENSIBO_REPORT_WEEKLY_AT` (`HH:MM`, host-local time, default `07:00`) and
+`SENSIBO_REPORT_WEEKLY_DAY` (`0`-`6`, `0`=Monday, default `0`) decide when
+each kind is next due. A report is due when the most recent scheduled instant
+is later than the last one actually written — a daemon that was down across
+several missed instants gets at most one catch-up report per kind, never a
+backlog. This CLI verb and the daemon hook share the same last-sent meta keys,
+so a manual `sensibo report daily --apply` also satisfies that day's due check.
+
+Every response — text and `--json` — carries `execution: local (stops when
+this daemon stops)`: like `notify test`, delivery only ever happens on demand
+or while `sensibo collect --daemon` is running.
+
+## Verbs
+
+- `sensibo report daily [--out PATH] [--apply] [--db PATH]` — trailing 24h.
+- `sensibo report weekly [--out PATH] [--apply] [--db PATH]` — trailing 7d.
+- `sensibo report overview` — describe this noun.
+
+## Usage
+
+    sensibo report daily                  # dry-run preview, nothing written
+    sensibo report daily --out out.svg    # write a copy, nothing sent
+    sensibo report daily --apply          # writes + delivers, exactly once
+    sensibo report weekly --apply --json
+    sensibo report overview --json
+
+## Environment
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `SENSIBO_REPORTS_DIR` | Where `--apply` writes reports | `~/.sensibo/reports` |
+| `SENSIBO_DASHBOARD_URL` | Base URL added to the delivery message | (omitted) |
+| `SENSIBO_REPORT_DAILY_AT` | Daily due time, `HH:MM` host-local | `07:00` |
+| `SENSIBO_REPORT_WEEKLY_AT` | Weekly due time, `HH:MM` host-local | `07:00` |
+| `SENSIBO_REPORT_WEEKLY_DAY` | Weekly due day, `0`-`6` (`0`=Monday) | `0` |
+"""
 
 _ROOM = """\
 # sensibo room
@@ -679,6 +816,14 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("query", "latest"): _QUERY,
     ("query", "range"): _QUERY,
     ("query", "locations"): _QUERY,
+    ("query", "health"): _QUERY_HEALTH,
+    ("notify",): _NOTIFY,
+    ("notify", "overview"): _NOTIFY,
+    ("notify", "test"): _NOTIFY,
+    ("report",): _REPORT,
+    ("report", "overview"): _REPORT,
+    ("report", "daily"): _REPORT,
+    ("report", "weekly"): _REPORT,
     ("room",): _ROOM,
     ("room", "overview"): _ROOM,
     ("room", "list"): _ROOM_LIST,
@@ -747,6 +892,8 @@ COMMAND_ORDER: tuple[tuple[str, ...], ...] = (
     ("set",),
     ("collect",),
     ("query",),
+    ("notify",),
+    ("report",),
     ("room",),
     ("rule",),
     ("smartmode",),
@@ -770,7 +917,9 @@ SUMMARIES: dict[tuple[str, ...], str] = {
     ("read",): "One snapshot of every current reading for a location.",
     ("set",): "Control the AC: dry-run by default, --apply commits.",
     ("collect",): "Poll the fleet on a cadence into the local store.",
-    ("query",): "Offline reads from the local store.",
+    ("query",): "Offline reads from the local store, incl. sensor health.",
+    ("notify",): "Preview or send a test notification (dry-run by default).",
+    ("report",): "Offline SVG report: render, and optionally deliver (dry-run by default).",
     ("room",): "Name sensing locations; flag stale sensors.",
     ("rule",): "Local rules engine: dry-run before arm, hysteresis.",
     ("smartmode",): "Climate React — runs in Sensibo's cloud.",

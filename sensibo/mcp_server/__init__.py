@@ -111,6 +111,14 @@ def build_server():
             "and staleness. Local store only."
         ),
     )
+    server.add_tool(
+        _tools.sensibo_health,
+        name="sensibo_health",
+        description=(
+            "Every location's health (ok/down/unknown), since, last_ok, transitions "
+            "since an optional ISO timestamp, and the collector heartbeat. Local store only."
+        ),
+    )
     return server
 
 

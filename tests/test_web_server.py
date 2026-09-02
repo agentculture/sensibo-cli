@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import re
 import socket
 import threading
@@ -32,14 +33,22 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+from sensibo.health.model import STATUS_DOWN, STATUS_OK, HealthConfig
+from sensibo.mcp_server import _tools as mcp_tools
 from sensibo.store import Store
+from sensibo.store.rooms import is_stale
 from sensibo.web import WebServer
-from sensibo.web.server import _DEFAULT_API_HISTORY_LIMIT, MAX_POST_BYTES
+from sensibo.web._wire import location_to_dict
+from sensibo.web.server import (
+    _DEFAULT_API_HISTORY_LIMIT,
+    ENV_REPORTS_DIR,
+    MAX_POST_BYTES,
+)
 
 _ALLOWED_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 
-@pytest.fixture()
+@pytest.fixture
 def loopback_only(monkeypatch: pytest.MonkeyPatch) -> None:
     """Block any socket connection whose target host isn't loopback."""
     orig_connect = socket.socket.connect
@@ -115,7 +124,7 @@ def _seed(db_path: Path) -> None:
         store.upsert_location("pod-stale", kind="pod", product_model="airq", seen_at=1.0)
 
 
-@pytest.fixture()
+@pytest.fixture
 def running_server(tmp_path: Path, loopback_only: None):
     db = tmp_path / "sensibo.db"
     _seed(db)
@@ -320,13 +329,16 @@ def test_location_page_history_window_excludes_readings_older_than_the_default_l
         store.upsert_location("pod-window", kind="pod", product_model="elements", seen_at=now)
         # One reading well inside the default 24h window, one well outside it.
         store.record_reading("pod-window", "temperature", 1.0, timestamp=now - 3600)
-        store.record_reading("pod-window", "temperature", 999.0, timestamp=now - (72 * 3600))
+        # A sentinel no timestamp, epoch, or heartbeat on the page can contain
+        # (a bare "999" collided with wall-clock values in CI, 2026-09-02).
+        stale_value = 4242.4242
+        store.record_reading("pod-window", "temperature", stale_value, timestamp=now - (72 * 3600))
 
     _status, body = _get(srv, "/location/pod-window")
     # The 72h-old reading must not appear anywhere in the rendered page: not
     # in "Latest readings" (it isn't the latest) and not in the sparkline
     # (outside the default lookback window).
-    assert "999" not in body
+    assert "4242.4242" not in body
 
 
 def test_api_history_defaults_to_a_bounded_limit_for_a_large_series(running_server) -> None:
@@ -565,3 +577,253 @@ def test_post_body_at_exactly_the_max_is_accepted(running_server) -> None:
     # Read-only dry run: exactly one get_pod call, zero writes -- proves the
     # (accepted, boundary-sized) body was actually parsed correctly.
     assert fake.calls == ["get_pod"]
+
+
+# --- staleness: one HealthConfig-derived source of truth (task t9) ----------
+
+
+def test_room_web_and_mcp_agree_on_staleness_at_the_boundary(tmp_path: Path) -> None:
+    """``room list``, the web wire format, and the MCP ``room_list`` tool must
+    all read the same STALE flag for a location right at the threshold.
+    """
+    config = HealthConfig(down_after_seconds=1000.0)
+    threshold_hours = config.down_after_seconds / 3600.0
+    now = time.time()
+    just_within = now - config.down_after_seconds + 5.0
+    just_past = now - config.down_after_seconds - 5.0
+
+    db = tmp_path / "boundary.db"
+    with Store(db_path=db) as store:
+        store.upsert_location(
+            "pod-within", kind="pod", product_model="elements", seen_at=just_within
+        )
+        store.upsert_location("pod-past", kind="pod", product_model="elements", seen_at=just_past)
+        loc_within = store.get_location("pod-within")
+        loc_past = store.get_location("pod-past")
+
+    # Surface 1: sensibo.store.rooms.is_stale -- what `sensibo room list` uses.
+    assert is_stale(loc_within.last_seen, stale_after_hours=threshold_hours) is False
+    assert is_stale(loc_past.last_seen, stale_after_hours=threshold_hours) is True
+
+    # Surface 2: the web dashboard's wire format.
+    within_dict = location_to_dict(loc_within, stale_after_hours=threshold_hours)
+    past_dict = location_to_dict(loc_past, stale_after_hours=threshold_hours)
+    assert within_dict["stale"] is False
+    assert past_dict["stale"] is True
+
+    # Surface 3: the MCP room_list tool.
+    result = mcp_tools.room_list(stale_after_hours=threshold_hours, db=str(db))
+    by_id = {row["id"]: row for row in result["locations"]}
+    assert by_id["pod-within"]["stale"] is False
+    assert by_id["pod-past"]["stale"] is True
+
+
+def test_web_server_stale_after_hours_defaults_from_health_config_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SENSIBO_HEALTH_DOWN_AFTER", "1800")
+    srv = WebServer(
+        ("127.0.0.1", 0),
+        db_path=str(tmp_path / "sensibo.db"),
+        token=_TOKEN,
+    )
+    try:
+        assert srv.stale_after_hours == pytest.approx(1800.0 / 3600.0)
+    finally:
+        srv.server_close()
+
+
+# --- health: status/since/last_ok shown, falling back to STALE (task t9) ---
+
+
+def test_index_and_location_show_health_row_and_fall_back_to_stale(running_server) -> None:
+    srv, _fake = running_server
+    now = time.time()
+    with Store(db_path=srv.db_path) as store:
+        store.set_health("pod-1", status=STATUS_DOWN, since=now - 500, last_ok=now - 900)
+        # pod-stale deliberately gets no health row -- it must still show the
+        # derived STALE flag as a fallback.
+
+    status, index_body = _get(srv, "/")
+    assert status == 200
+    assert "down" in index_body
+    assert "STALE" in index_body  # pod-stale's fallback flag
+
+    status, loc_body = _get(srv, "/location/pod-1")
+    assert status == 200
+    assert "down" in loc_body
+
+
+def test_api_locations_carries_health_fields_when_a_row_exists(running_server) -> None:
+    srv, _fake = running_server
+    now = time.time()
+    with Store(db_path=srv.db_path) as store:
+        store.set_health("pod-1", status=STATUS_OK, since=now - 10, last_ok=now)
+
+    status, body = _get(srv, "/api/locations")
+    assert status == 200
+    payload = json.loads(body)
+    by_id = {loc["id"]: loc for loc in payload["locations"]}
+    assert by_id["pod-1"]["health_status"] == STATUS_OK
+    assert by_id["pod-1"]["health_since"] == pytest.approx(now - 10)
+    assert by_id["pod-1"]["health_last_ok"] == pytest.approx(now)
+    # No health row recorded for pod-stale -- falls back to None fields.
+    assert by_id["pod-stale"]["health_status"] is None
+
+
+def test_index_shows_the_collector_heartbeat_from_meta(running_server) -> None:
+    srv, _fake = running_server
+    with Store(db_path=srv.db_path) as store:
+        store.set_meta("last_cycle_at", "2026-09-02T12:00:00Z")
+        store.set_meta("last_cycle_outcome", "ok")
+
+    status, body = _get(srv, "/")
+    assert status == 200
+    assert "2026-09-02T12:00:00Z" in body
+    assert "ok" in body
+
+
+def test_index_shows_never_and_unknown_heartbeat_when_no_cycle_has_run(running_server) -> None:
+    srv, _fake = running_server
+    status, body = _get(srv, "/")
+    assert status == 200
+    assert "never" in body
+    assert "unknown" in body
+
+
+# --- reports: serving offline SVGs from the reports directory (task t9) -----
+
+
+@pytest.fixture
+def reports_server(tmp_path: Path, loopback_only: None):
+    db = tmp_path / "sensibo.db"
+    _seed(db)
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    fake = _FakeClient({"pod-1": {"on": False, "mode": "heat", "targetTemperature": 20}})
+    srv = WebServer(
+        ("127.0.0.1", 0),
+        db_path=str(db),
+        token=_TOKEN,
+        client_factory=lambda: fake,
+        reports_dir=reports_dir,
+    )
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield srv, reports_dir
+    finally:
+        srv.shutdown()
+        thread.join(timeout=5)
+        srv.server_close()
+
+
+def _write_report(reports_dir: Path, name: str, *, mtime: float | None = None) -> Path:
+    path = reports_dir / name
+    path.write_text("<svg xmlns='http://www.w3.org/2000/svg'></svg>", encoding="utf-8")
+    if mtime is not None:
+        os.utime(path, (mtime, mtime))
+    return path
+
+
+def test_get_report_serves_svg_with_the_right_content_type(reports_server) -> None:
+    srv, reports_dir = reports_server
+    _write_report(reports_dir, "daily.svg")
+    status, body = _get(srv, "/reports/daily.svg")
+    assert status == 200
+    assert "<svg" in body
+
+    conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+    try:
+        conn.request("GET", "/reports/daily.svg")
+        resp = conn.getresponse()
+        assert resp.getheader("Content-Type") == "image/svg+xml"
+        resp.read()
+    finally:
+        conn.close()
+
+
+def test_get_report_rejects_path_traversal_404(reports_server) -> None:
+    srv, reports_dir = reports_server
+    # A real secret outside the reports dir, to prove traversal never reaches it.
+    secret = reports_dir.parent / "sensibo.db"
+    assert secret.is_file()
+    status, _body = _get(srv, "/reports/..%2Fsensibo.db")
+    assert status == 404
+
+
+def test_get_report_rejects_a_non_svg_name_404(reports_server) -> None:
+    srv, reports_dir = reports_server
+    (reports_dir / "notes.txt").write_text("not an svg", encoding="utf-8")
+    status, _body = _get(srv, "/reports/notes.txt")
+    assert status == 404
+
+
+def test_get_report_unknown_name_404(reports_server) -> None:
+    srv, _reports_dir = reports_server
+    status, _body = _get(srv, "/reports/does-not-exist.svg")
+    assert status == 404
+
+
+def test_get_report_rejects_a_symlink_that_escapes_the_reports_dir_404(reports_server) -> None:
+    """Qodo review Q8: a symlink named ``leak.svg`` inside the reports
+    directory but pointing at a file outside it must 404, not follow the
+    link and serve the outside file's contents."""
+    srv, reports_dir = reports_server
+    secret = reports_dir.parent / "sensibo.db"
+    assert secret.is_file()
+
+    link = reports_dir / "leak.svg"
+    link.symlink_to(secret)
+
+    status, body = _get(srv, "/reports/leak.svg")
+    assert status == 404
+    assert "sqlite" not in body.lower()
+
+
+def test_index_omits_a_symlink_that_escapes_the_reports_dir(reports_server) -> None:
+    """The same symlink must not appear in the index listing either."""
+    srv, reports_dir = reports_server
+    secret = reports_dir.parent / "sensibo.db"
+    (reports_dir / "leak.svg").symlink_to(secret)
+    _write_report(reports_dir, "real.svg")
+
+    status, body = _get(srv, "/")
+    assert status == 200
+    assert "real.svg" in body
+    assert "leak.svg" not in body
+
+
+def test_index_lists_reports_newest_first(reports_server) -> None:
+    srv, reports_dir = reports_server
+    now = time.time()
+    _write_report(reports_dir, "older.svg", mtime=now - 100)
+    _write_report(reports_dir, "newer.svg", mtime=now)
+
+    status, body = _get(srv, "/")
+    assert status == 200
+    assert body.index("newer.svg") < body.index("older.svg")
+
+
+def test_missing_reports_dir_yields_empty_listing_not_an_error(tmp_path: Path) -> None:
+    from sensibo.web.server import _list_reports
+
+    missing = tmp_path / "does-not-exist"
+    assert _list_reports(missing) == []
+
+
+def test_reports_dir_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    override_dir = tmp_path / "custom-reports"
+    override_dir.mkdir()
+    (override_dir / "a.svg").write_text("<svg></svg>", encoding="utf-8")
+    monkeypatch.setenv(ENV_REPORTS_DIR, str(override_dir))
+
+    srv = WebServer(
+        ("127.0.0.1", 0),
+        db_path=str(tmp_path / "sensibo.db"),
+        token=_TOKEN,
+    )
+    try:
+        assert srv.reports_dir == override_dir
+    finally:
+        srv.server_close()

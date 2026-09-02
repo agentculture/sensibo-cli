@@ -114,6 +114,7 @@ def test_build_server_registers_the_five_documented_tools() -> None:
         "query_history",
         "set_ac_state",
         "room_list",
+        "sensibo_health",
     }
 
 
@@ -238,6 +239,7 @@ def test_stdio_shaped_roundtrip_list_devices_and_set_ac_state(
                 "query_history",
                 "set_ac_state",
                 "room_list",
+                "sensibo_health",
             }
 
             dry_run = await session.call_tool("set_ac_state", {"pod_id": "pod-1", "mode": "cool"})

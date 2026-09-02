@@ -1,0 +1,14 @@
+{
+  "name": "off-when-bedroom-sensor-is-stale",
+  "pod": "pod-bedroom",
+  "comment": "Do not trust a dead room. The bedroom Room Sensor is a BLE satellite of the pod; when it stops reporting, its last motion and temperature readings freeze at whatever they were, so an occupancy or threshold rule keeps 'seeing' a room it can no longer measure. Rather than cool an empty room on stale data, this rule turns the AC off as soon as the sensor's persisted health says down/unknown, or its last good reading is older than 900s (the health default). Pair it with 'sensibo health list' to see why it fired.",
+  "action": {
+    "on": false
+  },
+  "conditions": {
+    "type": "stale",
+    "location": "Bedroom",
+    "after_seconds": 900
+  },
+  "execution": "local (stops when this daemon stops)"
+}

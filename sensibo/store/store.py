@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from . import _schema
 from ._paths import resolve_db_path
@@ -77,6 +77,57 @@ class ReadingRecord:
     timestamp: float
     value: float | str
     unit: str | None
+
+
+@dataclass(frozen=True)
+class HealthRecord:
+    """A location's *current* health state (one row per location).
+
+    ``since`` is when the location entered ``status``; ``last_ok`` is the
+    last instant it was known good (``None`` if it never has been).
+    ``parent_pod_id`` carries the nesting for a Room Sensor, so an alert can
+    name the pod a dead satellite hangs off without a second lookup.
+    """
+
+    location_id: str
+    status: str
+    since: float
+    last_ok: float | None
+    parent_pod_id: str | None
+
+
+@dataclass(frozen=True)
+class TransitionRecord:
+    """One health status change, from the append-only ``transitions`` log.
+
+    ``from_status`` is ``None`` for a location's very first observed state.
+    ``notified_at`` stays ``None`` until an alert for this transition has
+    actually gone out (:meth:`Store.mark_transition_notified`) — that is what
+    keeps a restart from re-announcing history.
+    """
+
+    id: int
+    location_id: str
+    from_status: str | None
+    to_status: str
+    at: float
+    notified_at: float | None
+
+
+@dataclass(frozen=True)
+class NotificationRecord:
+    """One attempted alert, from the append-only ``notifications`` log.
+
+    Recorded whatever the ``outcome`` — a delivery that failed is exactly
+    what an operator needs to be able to see afterwards.
+    """
+
+    id: int
+    kind: str
+    location_id: str | None
+    sent_at: float
+    transport: str
+    outcome: str
 
 
 def _normalize_timestamp(value: Timestamp | None) -> float:
@@ -139,6 +190,38 @@ def _row_to_reading(row: sqlite3.Row) -> ReadingRecord:
     )
 
 
+def _row_to_health(row: sqlite3.Row) -> HealthRecord:
+    return HealthRecord(
+        location_id=row["location_id"],
+        status=row["status"],
+        since=row["since"],
+        last_ok=row["last_ok"],
+        parent_pod_id=row["parent_pod_id"],
+    )
+
+
+def _row_to_transition(row: sqlite3.Row) -> TransitionRecord:
+    return TransitionRecord(
+        id=row["id"],
+        location_id=row["location_id"],
+        from_status=row["from_status"],
+        to_status=row["to_status"],
+        at=row["at"],
+        notified_at=row["notified_at"],
+    )
+
+
+def _row_to_notification(row: sqlite3.Row) -> NotificationRecord:
+    return NotificationRecord(
+        id=row["id"],
+        kind=row["kind"],
+        location_id=row["location_id"],
+        sent_at=row["sent_at"],
+        transport=row["transport"],
+        outcome=row["outcome"],
+    )
+
+
 class Store:
     """A connection to the local sqlite time-series store.
 
@@ -146,6 +229,10 @@ class Store:
     ``db_path`` parameter wins if given, else ``SENSIBO_DB``, else
     ``~/.sensibo/sensibo.db``. The parent directory is created (mode 0700) on
     connect if it doesn't already exist.
+
+    Opening raises :class:`~sensibo.store.StoreVersionError` when the file was
+    written by a newer build (see :mod:`sensibo.store._schema`'s version
+    policy); a v1 file is upgraded in place.
     """
 
     def __init__(self, db_path: str | os.PathLike[str] | None = None) -> None:
@@ -155,7 +242,12 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         with self._conn:
             self._conn.execute("PRAGMA journal_mode = WAL")
-        _schema.init_schema(self._conn)
+        try:
+            _schema.init_schema(self._conn, path=str(self.path))
+        except Exception:
+            self._conn.close()
+            raise
+        self.backfill_units_v2()
 
     def close(self) -> None:
         self._conn.close()
@@ -272,10 +364,49 @@ class Store:
         if resolved_model is None:
             existing = self.get_location(location_id)
             resolved_model = existing.product_model if existing else None
+        rows = []
         for field, value in values.items():
-            self.record_reading(
-                location_id, field, value, timestamp=ts, product_model=resolved_model
+            unit = derive_unit(field, resolved_model)
+            value_numeric, value_text = _coerce_value(value)
+            rows.append((location_id, field, ts, value_numeric, value_text, unit))
+        # One transaction per poll, not one per field: each commit is an fsync
+        # under WAL, and 10.8 ms/row (measured 2026-09-02) made a 7-day fixture
+        # take minutes. Approved plan deviation d1.
+        with self._conn:
+            self._conn.executemany(_schema.UPSERT_READING_SQL, rows)
+
+    def record_series(
+        self,
+        location_id: str,
+        field: str,
+        points: Iterable[tuple[Timestamp, Any]],
+        *,
+        product_model: str | None = None,
+    ) -> int:
+        """Bulk-record one field's time series in a single transaction.
+
+        ``points`` is an iterable of ``(timestamp, value)`` pairs. This is the
+        fast path for ``historicalMeasurements`` backfill and for tests that
+        seed days of history: one ``executemany`` under one commit instead of
+        one commit per reading (approved plan deviation d1). Same upsert
+        semantics as :meth:`record_reading`. Returns the number of rows sent.
+        """
+        resolved_model = product_model
+        if resolved_model is None:
+            existing = self.get_location(location_id)
+            resolved_model = existing.product_model if existing else None
+        unit = derive_unit(field, resolved_model)
+        rows = []
+        for stamp, value in points:
+            value_numeric, value_text = _coerce_value(value)
+            rows.append(
+                (location_id, field, _normalize_timestamp(stamp), value_numeric, value_text, unit)
             )
+        if not rows:
+            return 0
+        with self._conn:
+            self._conn.executemany(_schema.UPSERT_READING_SQL, rows)
+        return len(rows)
 
     def latest_reading(self, location_id: str, field: str) -> ReadingRecord | None:
         row = self._conn.execute(_schema.SELECT_LATEST_READING_SQL, (location_id, field)).fetchone()
@@ -355,6 +486,271 @@ class Store:
         """Return the value stored under ``key``, or ``None`` if unset."""
         row = self._conn.execute(_schema.GET_META_SQL, (key,)).fetchone()
         return row["value"] if row else None
+
+    # -- migrations -------------------------------------------------------
+
+    def backfill_units_v2(self) -> int:
+        """Tag legacy ``batteryVoltage`` rows as ``mV``. Returns rows changed.
+
+        A v1 binary had no unit rule for ``batteryVoltage`` and stored those
+        readings with a ``NULL`` unit; v2 does (:mod:`sensibo.store._units`).
+        This one-off pass repairs the existing rows so history and new
+        readings agree, and only ever fills a ``NULL`` — an explicitly
+        tagged row is left exactly as written.
+
+        Called once from :meth:`__init__` and guarded by the ``meta`` key
+        ``units_backfill_v2`` inside the same transaction as the update, so a
+        second call (or a second process) changes nothing and returns ``0``.
+        """
+        if self.get_meta(_schema.UNITS_BACKFILL_V2_KEY) is not None:
+            return 0
+        with self._conn:
+            cursor = self._conn.execute(_schema.BACKFILL_BATTERY_VOLTAGE_UNIT_SQL)
+            changed = cursor.rowcount
+            self._conn.execute(_schema.SET_META_SQL, (_schema.UNITS_BACKFILL_V2_KEY, str(changed)))
+        return changed
+
+    # -- health -----------------------------------------------------------
+
+    def set_health(
+        self,
+        location_id: str,
+        *,
+        status: str,
+        since: Timestamp,
+        last_ok: Timestamp | None = None,
+        parent_pod_id: str | None = None,
+    ) -> None:
+        """Record a location's current health state (upsert, one row per location).
+
+        ``since`` is when the location entered ``status`` — the caller owns
+        that decision, since only it knows whether this poll continued an
+        existing state or started a new one. ``parent_pod_id`` is only
+        needed for a Room Sensor; passing ``None`` keeps whatever is already
+        stored rather than clearing it.
+        """
+        with self._conn:
+            self._conn.execute(
+                _schema.UPSERT_HEALTH_SQL,
+                (
+                    location_id,
+                    status,
+                    _normalize_timestamp(since),
+                    None if last_ok is None else _normalize_timestamp(last_ok),
+                    parent_pod_id,
+                ),
+            )
+
+    def set_health_many(
+        self,
+        records: Iterable[tuple[str, str, Timestamp, Timestamp | None, str | None]],
+    ) -> None:
+        """Upsert many health rows in **one** transaction.
+
+        ``records`` are ``(location_id, status, since, last_ok, parent_pod_id)``
+        tuples — the positional form of :meth:`set_health`. A collector cycle
+        rewrites every location's health row at once; doing that with one
+        :meth:`set_health` call per location costs one fsync per location and
+        leaves a window where the map on disk is half this cycle and half the
+        last (Qodo review: "Health persistence commits per-location").
+        """
+        rows = [_health_row_params(record) for record in records]
+        if not rows:
+            return
+        with self._conn:
+            self._conn.executemany(_schema.UPSERT_HEALTH_SQL, rows)
+
+    def persist_health_cycle(
+        self,
+        *,
+        health_rows: Iterable[tuple[str, str, Timestamp, Timestamp | None, str | None]],
+        transitions: Iterable[tuple[str, str | None, str, Timestamp]],
+        meta: Mapping[str, str] | None = None,
+        meta_from_transitions: Any = None,
+    ) -> list[int]:
+        """Persist one health cycle — rows, transitions and meta — in one commit.
+
+        Returns the ids of the appended transitions, in the order given.
+
+        This is the crash-safety primitive behind the alerting path: a health
+        state that has been committed without the transition (and without the
+        owed-notification debt that transition carries) is an alert nobody can
+        recover, because the *next* cycle sees no edge to re-announce. Writing
+        all three inside a single ``with self._conn`` block means a process
+        exit either loses the whole cycle — which the next cycle re-derives —
+        or keeps it whole.
+
+        ``meta_from_transitions``, when given, is called with the freshly
+        allocated transition ids **inside** the transaction and must return
+        further meta pairs to write. That is what lets the owed-notification
+        queue, whose entries reference transition ids that do not exist until
+        the inserts run, land atomically with the rows it points at.
+        """
+        rows = [_health_row_params(record) for record in health_rows]
+        transition_list = list(transitions)
+        ids: list[int] = []
+        with self._conn:
+            if rows:
+                self._conn.executemany(_schema.UPSERT_HEALTH_SQL, rows)
+            for location_id, from_status, to_status, at in transition_list:
+                cursor = self._conn.execute(
+                    _schema.INSERT_TRANSITION_SQL,
+                    (location_id, from_status, to_status, _normalize_timestamp(at)),
+                )
+                ids.append(int(cursor.lastrowid))
+            pairs: dict[str, str] = dict(meta or {})
+            if meta_from_transitions is not None:
+                pairs.update(meta_from_transitions(list(ids)))
+            for key, value in pairs.items():
+                self._conn.execute(_schema.SET_META_SQL, (key, value))
+        return ids
+
+    def get_health(self, location_id: str) -> HealthRecord | None:
+        """The location's current health row, or ``None`` if never recorded."""
+        row = self._conn.execute(_schema.SELECT_HEALTH_SQL, (location_id,)).fetchone()
+        return _row_to_health(row) if row else None
+
+    def list_health(self) -> list[HealthRecord]:
+        """Every location's current health row, ordered by location id."""
+        rows = self._conn.execute(_schema.SELECT_ALL_HEALTH_SQL).fetchall()
+        return [_row_to_health(row) for row in rows]
+
+    # -- transitions ------------------------------------------------------
+
+    def record_transition(
+        self,
+        location_id: str,
+        from_status: str | None,
+        to_status: str,
+        at: Timestamp,
+    ) -> int:
+        """Append a health status change. Returns the new transition's id.
+
+        The log is append-only: a transition is a historical fact, never
+        edited afterwards. The one field that does change later is
+        ``notified_at`` (:meth:`mark_transition_notified`).
+        """
+        with self._conn:
+            cursor = self._conn.execute(
+                _schema.INSERT_TRANSITION_SQL,
+                (location_id, from_status, to_status, _normalize_timestamp(at)),
+            )
+        return int(cursor.lastrowid)
+
+    def list_transitions(
+        self,
+        location_id: str | None = None,
+        since: Timestamp | None = None,
+    ) -> list[TransitionRecord]:
+        """Transitions, oldest first, optionally narrowed by location and/or time.
+
+        ``since`` is an inclusive lower bound on ``at``. Both filters are
+        applied SQL-side, so a long-lived store never materialises its whole
+        transition history to answer a narrow question.
+        """
+        since_ts = _normalize_timestamp(since) if since is not None else None
+        sql, params = _build_log_query(
+            "SELECT id, location_id, from_status, to_status, at, notified_at FROM transitions",
+            time_column="at",
+            location_id=location_id,
+            since_ts=since_ts,
+        )
+        rows = self._conn.execute(sql, params).fetchall()
+        return [_row_to_transition(row) for row in rows]
+
+    def mark_transition_notified(self, transition_id: int, notified_at: Timestamp) -> None:
+        """Stamp when an alert for this transition actually went out.
+
+        Until this is set, the transition is still owed a notification — that
+        is what makes the alerting path safe to resume after a restart.
+        """
+        with self._conn:
+            self._conn.execute(
+                _schema.MARK_TRANSITION_NOTIFIED_SQL,
+                (_normalize_timestamp(notified_at), transition_id),
+            )
+
+    # -- notifications ----------------------------------------------------
+
+    def record_notification(
+        self,
+        *,
+        kind: str,
+        location_id: str | None,
+        sent_at: Timestamp,
+        transport: str,
+        outcome: str,
+    ) -> int:
+        """Append an attempted alert. Returns the new notification's id.
+
+        Every attempt is recorded regardless of ``outcome`` — a failed
+        delivery is precisely what an operator needs to be able to see later.
+        ``location_id`` may be ``None`` for a store-wide alert that isn't
+        about one location.
+        """
+        with self._conn:
+            cursor = self._conn.execute(
+                _schema.INSERT_NOTIFICATION_SQL,
+                (kind, location_id, _normalize_timestamp(sent_at), transport, outcome),
+            )
+        return int(cursor.lastrowid)
+
+    def list_notifications(
+        self,
+        since: Timestamp | None = None,
+        location_id: str | None = None,
+    ) -> list[NotificationRecord]:
+        """Notifications, oldest first, optionally narrowed by time and/or location.
+
+        ``since`` is an inclusive lower bound on ``sent_at``.
+        """
+        since_ts = _normalize_timestamp(since) if since is not None else None
+        sql, params = _build_log_query(
+            "SELECT id, kind, location_id, sent_at, transport, outcome FROM notifications",
+            time_column="sent_at",
+            location_id=location_id,
+            since_ts=since_ts,
+        )
+        rows = self._conn.execute(sql, params).fetchall()
+        return [_row_to_notification(row) for row in rows]
+
+
+def _health_row_params(
+    record: tuple[str, str, Timestamp, Timestamp | None, str | None],
+) -> tuple[Any, ...]:
+    """Normalise one ``(location_id, status, since, last_ok, parent)`` tuple."""
+    location_id, status, since, last_ok, parent_pod_id = record
+    return (
+        location_id,
+        status,
+        _normalize_timestamp(since),
+        None if last_ok is None else _normalize_timestamp(last_ok),
+        parent_pod_id,
+    )
+
+
+def _build_log_query(
+    select_sql: str,
+    *,
+    time_column: str,
+    location_id: str | None,
+    since_ts: float | None,
+) -> tuple[str, tuple[Any, ...]]:
+    """Build the (sql, params) pair for an append-only log listing.
+
+    ``select_sql`` and ``time_column`` are internal constants, never caller
+    input; every value the caller supplies goes through a ``?`` placeholder.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    if location_id is not None:
+        clauses.append("location_id = ?")
+        params.append(location_id)
+    if since_ts is not None:
+        clauses.append(f"{time_column} >= ?")
+        params.append(since_ts)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return f"{select_sql}{where} ORDER BY {time_column} ASC, id ASC", tuple(params)
 
 
 def _build_range_query(

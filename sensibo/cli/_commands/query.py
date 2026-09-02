@@ -31,10 +31,27 @@ import datetime
 
 from sensibo.cli._errors import EXIT_USER_ERROR, CliError
 from sensibo.cli._output import emit_result
-from sensibo.store import LocationRecord, ReadingRecord, Store
+from sensibo.health import EXECUTION_LOCAL, STATUS_DOWN, STATUS_OK, iso8601
+from sensibo.store import (
+    HealthRecord,
+    LocationRecord,
+    ReadingRecord,
+    Store,
+    StoreVersionError,
+    TransitionRecord,
+)
+from sensibo.store.rooms import (
+    AmbiguousLocationError,
+    LocationNotFoundError,
+    resolve_location,
+)
 
 _COLLECT_HINT = "run 'sensibo collect' first to populate the local store"
 _LOCATIONS_HINT = "list known locations with 'sensibo query locations'"
+
+#: The field name every local-execution payload carries (matches
+#: sensibo/rules/model.py and sensibo/cli/_cloud.py's own EXECUTION_FIELD).
+EXECUTION_FIELD = "execution"
 
 
 # -- error helpers ------------------------------------------------------------
@@ -54,6 +71,49 @@ def _unknown_location_error(location_id: str) -> CliError:
         message=f"unknown location: {location_id!r}",
         remediation=f"{_LOCATIONS_HINT}; {_COLLECT_HINT}",
     )
+
+
+def _empty_health_error() -> CliError:
+    return CliError(
+        code=EXIT_USER_ERROR,
+        message="the local store has no sensor health data yet",
+        remediation=_COLLECT_HINT,
+    )
+
+
+def _no_health_for_location_error(location_id: str) -> CliError:
+    return CliError(
+        code=EXIT_USER_ERROR,
+        message=f"no health data recorded yet for location: {location_id!r}",
+        remediation=_COLLECT_HINT,
+    )
+
+
+def _store_version_error(err: StoreVersionError) -> CliError:
+    return CliError(
+        code=2,
+        message=str(err),
+        remediation=err.remediation,
+    )
+
+
+def _resolve_location_or_raise(store: Store, name_or_id: str) -> LocationRecord:
+    try:
+        return resolve_location(store, name_or_id)
+    except AmbiguousLocationError as err:
+        candidates = ", ".join(loc.id for loc in err.candidates)
+        raise CliError(
+            code=EXIT_USER_ERROR,
+            message=f"'{name_or_id}' matches more than one location: {candidates}",
+            remediation="use the location's stable id to disambiguate",
+        ) from err
+    except LocationNotFoundError as err:
+        known = ", ".join(err.known) if err.known else "(none)"
+        raise CliError(
+            code=EXIT_USER_ERROR,
+            message=f"no location matches {name_or_id!r}",
+            remediation=f"{_LOCATIONS_HINT}: {known}",
+        ) from err
 
 
 def _parse_iso8601(value: str, flag: str) -> float:
@@ -144,6 +204,89 @@ def _render_locations_table(locations: list[LocationRecord]) -> str:
     return "\n".join(lines)
 
 
+# -- health wire shape ---------------------------------------------------------
+
+
+def _transition_to_dict(t: TransitionRecord) -> dict[str, object]:
+    return {
+        "from_status": t.from_status,
+        "to_status": t.to_status,
+        "at": iso8601(t.at),
+    }
+
+
+def _compute_outages(transitions: list[TransitionRecord]) -> list[dict[str, object]]:
+    """Closed down->ok pairs, oldest first, each with a computed duration.
+
+    ``transitions`` must already be oldest-first (matches
+    :meth:`sensibo.store.Store.list_transitions`). A ``down`` still without a
+    matching ``ok`` (an open outage) contributes nothing here — only closed
+    pairs get a duration.
+    """
+    outages: list[dict[str, object]] = []
+    pending_down: TransitionRecord | None = None
+    for t in transitions:
+        if t.to_status == STATUS_DOWN:
+            pending_down = t
+        elif t.to_status == STATUS_OK and pending_down is not None:
+            outages.append(
+                {
+                    "start": iso8601(pending_down.at),
+                    "end": iso8601(t.at),
+                    "duration_seconds": t.at - pending_down.at,
+                }
+            )
+            pending_down = None
+    return outages
+
+
+def _health_to_dict(h: HealthRecord, transitions: list[TransitionRecord]) -> dict[str, object]:
+    return {
+        "location_id": h.location_id,
+        "status": h.status,
+        "since": iso8601(h.since),
+        "last_ok": iso8601(h.last_ok) if h.last_ok is not None else "never",
+        "parent_pod_id": h.parent_pod_id,
+        "transitions": [_transition_to_dict(t) for t in transitions],
+        "outages": _compute_outages(transitions),
+    }
+
+
+def _render_health_text(payload: dict[str, object]) -> str:
+    collector: dict[str, object] = payload["collector"]  # type: ignore[assignment]
+    last_cycle_at = collector["last_cycle_at"] or "never"
+    last_cycle_outcome = collector["last_cycle_outcome"] or "unknown"
+    lines = [
+        f"{EXECUTION_FIELD}: {payload[EXECUTION_FIELD]}",
+        "",
+        f"collector last_cycle_at: {last_cycle_at}",
+        f"collector last_cycle_outcome: {last_cycle_outcome}",
+        "",
+    ]
+    locations = payload["locations"]
+    if not locations:
+        lines.append("(no health data for the requested location)")
+        return "\n".join(lines)
+    for loc in locations:  # type: ignore[assignment]
+        lines.append(f"location: {loc['location_id']}")
+        lines.append(f"  status: {loc['status']}")
+        lines.append(f"  since: {loc['since']}")
+        lines.append(f"  last_ok: {loc['last_ok']}")
+        if loc["outages"]:
+            lines.append("  outages:")
+            for o in loc["outages"]:
+                lines.append(
+                    f"    start={o['start']} end={o['end']} "
+                    f"duration_seconds={o['duration_seconds']:g}"
+                )
+        if loc["transitions"]:
+            lines.append("  transitions:")
+            for t in loc["transitions"]:
+                lines.append(f"    {t['from_status']} -> {t['to_status']} at {t['at']}")
+        lines.append("")
+    return "\n".join(lines).rstrip("\n")
+
+
 # -- verb handlers -------------------------------------------------------------
 
 
@@ -220,6 +363,55 @@ def cmd_query_locations(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_query_health(args: argparse.Namespace) -> int:
+    """``sensibo query health [LOCATION] [--since ISO] [--json]`` — offline only.
+
+    Answers exclusively from :meth:`Store.list_health` /
+    :meth:`Store.list_transitions` / :meth:`Store.get_meta` — never the
+    network, same promise as every other ``query`` verb. Sensor health rows
+    are populated by ``sensibo collect``'s cycle-by-cycle evaluation (a
+    sibling task); an empty ``health`` table means no cycle has run yet.
+    """
+    json_mode = bool(getattr(args, "json", False))
+    since_ts = _parse_iso8601(args.since, "--since") if args.since else None
+
+    try:
+        with Store(db_path=args.db) as store:
+            health_rows = store.list_health()
+            if not health_rows:
+                raise _empty_health_error()
+
+            by_id = {h.location_id: h for h in health_rows}
+            if args.location is not None:
+                loc = _resolve_location_or_raise(store, args.location)
+                if loc.id not in by_id:
+                    raise _no_health_for_location_error(loc.id)
+                target_ids = [loc.id]
+            else:
+                target_ids = sorted(by_id)
+
+            locations_out = []
+            for lid in target_ids:
+                transitions = store.list_transitions(location_id=lid, since=since_ts)
+                locations_out.append(_health_to_dict(by_id[lid], transitions))
+
+            last_cycle_at = store.get_meta("last_cycle_at")
+            last_cycle_outcome = store.get_meta("last_cycle_outcome")
+    except StoreVersionError as err:
+        raise _store_version_error(err) from err
+
+    payload: dict[str, object] = {
+        "locations": locations_out,
+        "collector": {"last_cycle_at": last_cycle_at, "last_cycle_outcome": last_cycle_outcome},
+        EXECUTION_FIELD: EXECUTION_LOCAL,
+    }
+    if json_mode:
+        emit_result(payload, json_mode=True)
+    else:
+        emit_result(_render_health_text(payload), json_mode=False)
+    return 0
+
+
 # -- registration ---------------------------------------------------------
 
 
@@ -278,3 +470,25 @@ def register(sub: argparse._SubParsersAction) -> None:
     )
     _add_db_and_json(locations_p)
     locations_p.set_defaults(func=cmd_query_locations)
+
+    health_p = query_sub.add_parser(
+        "health",
+        help=(
+            "Sensor health: current status, since, last_ok, and outage "
+            "(transition) history per location."
+        ),
+    )
+    health_p.add_argument(
+        "location",
+        nargs="?",
+        default=None,
+        help="Location id, alias, or room name to restrict to (default: every location).",
+    )
+    health_p.add_argument(
+        "--since",
+        default=None,
+        metavar="ISO8601",
+        help="Only include transitions at/after this time.",
+    )
+    _add_db_and_json(health_p)
+    health_p.set_defaults(func=cmd_query_health)

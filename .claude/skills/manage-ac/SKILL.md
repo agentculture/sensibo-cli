@@ -70,6 +70,8 @@ sensibo query latest               # latest reading per location (offline)
 sensibo query latest <loc> --field temperature
 sensibo query range <loc> --field temperature --since 2026-08-01   # offline time series
 sensibo room list                  # locations, flagging stale sensors
+sensibo query health                # sensor health: which locations are down/unknown, since when
+sensibo query health <location> --json
 ```
 
 `query` never touches the network (local store); `read` and `devices` poll the
@@ -124,6 +126,20 @@ and a rename never orphans history (readings stay keyed on the stable id).
 Prefer `rule` for conditions that react to sensor readings on this machine;
 prefer `schedule`/`timer` for time-based behaviour that must survive this
 machine being off.
+
+## Sensor health, alerts, and reports
+
+Runs inside `sensibo collect` — stops when that daemon stops, same
+local-execution contract as `rule`. See `sensibo explain query health`,
+`sensibo explain notify`, `sensibo explain report`, or `docs/health.md`.
+
+```bash
+sensibo notify test                # preview a test alert through the configured webhook/script
+sensibo notify test --apply        # sends exactly once per configured transport
+sensibo report daily               # preview: where the trailing-24h SVG would land
+sensibo report daily --apply       # writes + delivers it
+sensibo report weekly --apply      # trailing-7d SVG
+```
 
 ## Scripts
 

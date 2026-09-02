@@ -25,6 +25,7 @@ import pytest
 
 import sensibo.api.client as client_module
 import sensibo.cli._commands.collect as collect_cmd
+import sensibo.collect.collector as collector_module
 from sensibo.api import GatedHistoryWindowError
 from sensibo.api.client import SensiboClient
 from sensibo.cli import main
@@ -33,12 +34,29 @@ from sensibo.collect import (
     DEFAULT_INTERVAL,
     META_BACKFILL_DONE,
     META_BACKFILL_WINDOW,
+    META_COLLECT_INTERVAL,
     MIN_INTERVAL,
     BackfillResult,
     Collector,
     CycleResult,
 )
+from sensibo.notify import NotifyConfig
 from sensibo.store import KIND_POD, KIND_ROOM_SENSOR, Store
+
+
+@pytest.fixture(autouse=True)
+def _never_the_real_notify_transport(monkeypatch):
+    """No test in this module may resolve the operator's real notify config.
+
+    Every cycle now runs the health engine, and a stale fixture timestamp is a
+    genuine "down" — so without this seam a suite run on the operator's own
+    machine would POST to their live webhook.
+    """
+    monkeypatch.setattr(collect_cmd, "build_notifier", lambda: lambda payload: [])
+    # …and the engine tests below construct a Collector with the default
+    # notifier, so neutralise the config it would resolve too.
+    monkeypatch.setattr(collector_module, "resolve_notify_config", lambda *a, **k: NotifyConfig())
+
 
 # --- sample fleet data ----------------------------------------------------
 
@@ -409,7 +427,7 @@ def test_collect_once_runs_backfill_only_on_first_run(tmp_path) -> None:
 # --- CLI wiring -----------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def patched_client(monkeypatch):
     """Install a fake client factory; return a setter the test calls with data."""
     holder: dict[str, _FakeClient] = {}
@@ -500,6 +518,25 @@ def test_collect_daemon_handles_keyboard_interrupt_cleanly(
     assert "stop" in captured.err.lower()
 
 
+def test_collect_daemon_publishes_its_interval_for_the_heartbeat_check(
+    patched_client, monkeypatch, capsys, tmp_path
+) -> None:
+    """Qodo 14: doctor cannot judge freshness without the daemon's own cadence."""
+    patched_client(_FakeClient(_snapshot(_airpro_pod()), history_fn=_gated_until(1)))
+
+    def _interrupt(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(collect_cmd, "_sleep", _interrupt)
+
+    db = tmp_path / "s.db"
+    assert main(["collect", "--daemon", "--interval", "600", "--db", str(db), "--json"]) == 0
+    capsys.readouterr()
+
+    with Store(db_path=db) as store:
+        assert store.get_meta(META_COLLECT_INTERVAL) == repr(600.0)
+
+
 def test_collect_maps_api_error_to_clean_cli_error(monkeypatch, capsys, tmp_path) -> None:
     from sensibo.api import MissingApiKeyError
 
@@ -544,3 +581,101 @@ def test_store_meta_roundtrip_and_upsert(tmp_path) -> None:
         assert store.get_meta("k") == "v1"
         store.set_meta("k", "v2")  # idempotent upsert, not a duplicate
         assert store.get_meta("k") == "v2"
+
+
+# --- report scheduling hook (task t7) --------------------------------------
+#
+# The daemon loop calls collect_cmd.run_report_hook(store, now) after every
+# cycle — success or failure — right before the inter-cycle sleep. These
+# tests replace the seam with a recorder to prove BOTH paths call it, then
+# leave the seam alone and drive an actual report through the loop with a
+# recording notifier to prove one really gets generated and delivered.
+
+
+def test_daemon_calls_report_hook_after_success_and_after_failure(
+    patched_client, monkeypatch, tmp_path
+) -> None:
+    fake = _FakeClient(_snapshot(_airpro_pod()), history_fn=_gated_until(1))
+    patched_client(fake)
+
+    calls: list[tuple[object, float]] = []
+    monkeypatch.setattr(
+        collect_cmd, "run_report_hook", lambda store, now: calls.append((store, now))
+    )
+
+    # First cycle succeeds; the second raises ApiError (the failed-cycle
+    # path); the third sleep call raises KeyboardInterrupt to stop the loop.
+    sleeps = {"n": 0}
+    original_fleet_snapshot = fake.fleet_snapshot
+
+    def _flaky_snapshot():
+        sleeps["n"] += 1
+        if sleeps["n"] == 2:
+            from sensibo.api import ApiError
+            from sensibo.cli._errors import EXIT_ENV_ERROR
+
+            raise ApiError(EXIT_ENV_ERROR, "boom", remediation="retry")
+        return original_fleet_snapshot()
+
+    fake.fleet_snapshot = _flaky_snapshot
+
+    stop_after = {"n": 0}
+
+    def _sleep_then_stop(_seconds):
+        stop_after["n"] += 1
+        if stop_after["n"] >= 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(collect_cmd, "_sleep", _sleep_then_stop)
+
+    rc = main(["collect", "--daemon", "--db", str(tmp_path / "s.db"), "--json"])
+    assert rc == 0
+    # Two cycles ran before the interrupt (one ok, one failed) — the hook ran
+    # after both, right before each's _sleep call.
+    assert len(calls) == 2
+
+
+def test_daemon_generates_and_delivers_report_from_the_loop(
+    patched_client, monkeypatch, tmp_path
+) -> None:
+    """End-to-end: the real run_report_hook, driven from the daemon loop, writes
+    and delivers a report through a recording notifier — no seam overridden
+    except the notify transport (never a real webhook) and the reports dir."""
+    fake = _FakeClient(_snapshot(_airpro_pod()), history_fn=_gated_until(1))
+    patched_client(fake)
+
+    reports_dir = tmp_path / "reports"
+    monkeypatch.setenv("SENSIBO_REPORTS_DIR", str(reports_dir))
+    monkeypatch.delenv("SENSIBO_DASHBOARD_URL", raising=False)
+
+    delivered: list[object] = []
+
+    def _recording_notifier(payload):
+        delivered.append(payload)
+        return []
+
+    monkeypatch.setattr(collect_cmd, "build_notifier", lambda: _recording_notifier)
+
+    def _interrupt(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(collect_cmd, "_sleep", _interrupt)
+
+    db = tmp_path / "s.db"
+    rc = main(["collect", "--daemon", "--db", str(db), "--json"])
+    assert rc == 0
+
+    # A report is always due on the very first hook call (never sent before),
+    # so one cycle produces both a daily and a weekly report.
+    assert reports_dir.is_dir()
+    written = sorted(p.name for p in reports_dir.glob("*.svg"))
+    assert any(name.startswith("daily-") for name in written)
+    assert any(name.startswith("weekly-") for name in written)
+    # The recorder also sees the cycle's own health notification(s) (this
+    # fixture's fixed timestamps read as "down") — filter to the report ones.
+    report_payloads = [p for p in delivered if p.kind == "report"]
+    assert len(report_payloads) == 2
+
+    with Store(db_path=db) as store:
+        assert store.get_meta("last_daily_report_at") is not None
+        assert store.get_meta("last_weekly_report_at") is not None

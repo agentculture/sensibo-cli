@@ -113,17 +113,52 @@ exist.
 
 | Path | Method | Auth | What |
 |---|---|---|---|
-| `/` | GET | open | Every location: latest readings, staleness |
-| `/location/<id>` | GET | open | One location: latest readings, history sparklines, control form (pods only) |
+| `/` | GET | open | Every location: latest readings, health status, staleness; collector heartbeat; report list |
+| `/location/<id>` | GET | open | One location: latest readings, history sparklines, health status, control form (pods only) |
 | `/api/locations` | GET | open | JSON: every location (mirrors `sensibo query locations`) |
 | `/api/latest` | GET | open | JSON: latest reading(s); `?location=&field=` |
 | `/api/history` | GET | open | JSON: a field's time series; `?location=&field=[&since=][&until=]` |
+| `/reports/<name>` | GET | open | One offline `*.svg` report from the reports directory |
 | `/control` | POST | token | HTML control result: dry-run diff, or applied result with `confirm=1` |
 | `/api/set` | POST | token | Same contract as `/control`, JSON in and out |
 
 `/api/set` and `/control` both accept `pod_id`, `power`, `mode`, `target`,
 `fan`, `swing`, and `confirm` — the same fields `sensibo set` accepts as
 flags, mapped onto the same `acState` properties.
+
+## Staleness: one source of truth (task t9)
+
+The STALE flag on every page and JSON endpoint above, `sensibo room list`'s
+STALE flag, and the MCP `room_list` tool's `stale` field are now all derived
+from the same place: `sensibo.health.model.HealthConfig.down_after_seconds`
+(default 900s), loaded via `HealthConfig.from_env()` — so an operator's
+`SENSIBO_HEALTH_DOWN_AFTER` override changes every one of them together, not
+just the health alert evaluator. `WebServer.__init__`'s `stale_after_hours`
+parameter still accepts an explicit override (tests use this for
+determinism); left unset, it resolves from the environment at construction
+time.
+
+When a location has a row in the health table (populated by the health
+evaluator once it has run — see the sensor-health-alerts plan), the dashboard
+and `/api/locations` show that row's own `status` (`ok` / `down` / `unknown`
+/ `unknown_parent_down`), `since`, and `last_ok` instead of just the STALE
+flag. A location with no health row yet falls back to the plain derived STALE
+flag, exactly as before task t9.
+
+The index page's header also shows the collector's own heartbeat —
+`last_cycle_at` / `last_cycle_outcome`, two store-level facts `sensibo
+collect` writes every poll cycle — so "no alerts firing" can be told apart
+from "the collector stopped running".
+
+## Reports directory (task t9)
+
+`sensibo web` serves offline `*.svg` reports (`sensibo.report.render_report`)
+read-only under `/reports/<name>`, listed on the index page newest first.
+Resolution order: the `reports_dir` argument to `WebServer.__init__`, then
+`SENSIBO_REPORTS_DIR`, then `~/.sensibo/reports/`. A missing directory is an
+empty list, not an error. Requests are validated against path traversal and
+non-`.svg` names (both 404) — same open-read trust model as every other GET
+route above.
 
 ## See also
 
