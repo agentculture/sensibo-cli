@@ -11,9 +11,14 @@ many instants were missed". A daemon that was down across several missed
 7am's therefore gets at most one catch-up report per kind when it comes back,
 never a backlog of one per missed day.
 
-Times are host-local (``tz`` defaults to the host's local zone via
-``datetime.now().astimezone().tzinfo``, injectable for deterministic tests) —
-an operator picks "07:00" meaning their own wall clock, not UTC.
+Times are host-local. With ``tz`` omitted (``None``), candidates are built as
+**naive** local datetimes and converted back to epoch via
+:meth:`datetime.datetime.astimezone` — naive means "system local", so each
+candidate's own date carries the correct DST offset for *that* date, never a
+single fixed offset reused across a DST transition (Qodo review Q16). ``tz``
+stays injectable for deterministic tests (e.g. a fixed
+:class:`datetime.timezone` or a dynamic :class:`zoneinfo.ZoneInfo`) — an
+operator picks "07:00" meaning their own wall clock, not UTC.
 """
 
 from __future__ import annotations
@@ -99,20 +104,43 @@ class ReportSchedule:
         return cls(**kwargs)  # type: ignore[arg-type]
 
 
-def _resolve_tz(tz: datetime.tzinfo | None) -> datetime.tzinfo | None:
+def _local_now(now: float, tz: datetime.tzinfo | None) -> datetime.datetime:
+    """``now`` as a local datetime: tz-aware when ``tz`` is given, else naive.
+
+    A **naive** datetime here means "the host's system local time" — exactly
+    what :meth:`datetime.datetime.timestamp` assumes for a naive instance
+    (it defers to the platform's ``mktime``, which honors DST for whatever
+    date the naive value actually falls on).
+    """
     if tz is not None:
-        return tz
-    return datetime.datetime.now().astimezone().tzinfo
+        return datetime.datetime.fromtimestamp(now, tz=tz)
+    return datetime.datetime.fromtimestamp(now)  # naive, system-local
+
+
+def _to_epoch(candidate: datetime.datetime, tz: datetime.tzinfo | None) -> float:
+    """Convert a (possibly naive) local candidate back to an epoch instant.
+
+    With ``tz`` given, ``candidate`` is already aware of that (dynamic, e.g.
+    :mod:`zoneinfo`) zone and ``.timestamp()`` alone is correct. With ``tz``
+    ``None``, ``candidate`` is naive local; ``.astimezone()`` (no argument)
+    attaches the system zone's *correct offset for that date* — this is what
+    keeps a DST transition from silently reusing an earlier candidate's fixed
+    offset (Qodo review Q16), unlike computing one fixed offset from "now"
+    and reusing it for every candidate date.
+    """
+    if tz is not None:
+        return candidate.timestamp()
+    return candidate.astimezone().timestamp()
 
 
 def _most_recent_daily_instant(at: str, now: float, tz: datetime.tzinfo | None) -> float:
     """The most recent local ``HH:MM`` instant at or before ``now``, as epoch."""
     hour, minute = _parse_hhmm(at)
-    now_local = datetime.datetime.fromtimestamp(now, tz=tz)
+    now_local = _local_now(now, tz)
     candidate = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if candidate > now_local:
         candidate -= datetime.timedelta(days=1)
-    return candidate.timestamp()
+    return _to_epoch(candidate, tz)
 
 
 def _most_recent_weekly_instant(
@@ -120,13 +148,13 @@ def _most_recent_weekly_instant(
 ) -> float:
     """The most recent local ``weekly_day``/``HH:MM`` instant at or before ``now``."""
     hour, minute = _parse_hhmm(at)
-    now_local = datetime.datetime.fromtimestamp(now, tz=tz)
+    now_local = _local_now(now, tz)
     days_since_scheduled = (now_local.weekday() - weekly_day) % 7
     candidate_day = now_local - datetime.timedelta(days=days_since_scheduled)
     candidate = candidate_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if candidate > now_local:
         candidate -= datetime.timedelta(days=7)
-    return candidate.timestamp()
+    return _to_epoch(candidate, tz)
 
 
 def due_reports(
@@ -143,16 +171,13 @@ def due_reports(
     it is always due). Order in the returned list is always daily then
     weekly, when both are due.
     """
-    resolved_tz = _resolve_tz(tz)
     due: list[str] = []
 
-    daily_instant = _most_recent_daily_instant(schedule.daily_at, now, resolved_tz)
+    daily_instant = _most_recent_daily_instant(schedule.daily_at, now, tz)
     if last_daily_at is None or daily_instant > last_daily_at:
         due.append(DAILY)
 
-    weekly_instant = _most_recent_weekly_instant(
-        schedule.weekly_at, schedule.weekly_day, now, resolved_tz
-    )
+    weekly_instant = _most_recent_weekly_instant(schedule.weekly_at, schedule.weekly_day, now, tz)
     if last_weekly_at is None or weekly_instant > last_weekly_at:
         due.append(WEEKLY)
 

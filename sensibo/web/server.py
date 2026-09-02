@@ -213,27 +213,53 @@ def _resolve_reports_dir(reports_dir: "str | os.PathLike[str] | None") -> Path:
 
 def _list_reports(reports_dir: Path) -> list[str]:
     """Every ``*.svg`` report's filename, newest first. Empty if the
-    directory doesn't exist yet — not an error (task t9 criterion 3)."""
+    directory doesn't exist yet — not an error (task t9 criterion 3).
+
+    Rejects symlink entries outright (Qodo review Q8) — same rule as
+    :func:`_safe_report_path`, so a symlink planted in the reports directory
+    (e.g. pointing at a file outside it) never appears in the index either.
+    """
     if not reports_dir.is_dir():
         return []
-    entries = [p for p in reports_dir.iterdir() if p.is_file() and p.suffix == ".svg"]
+    entries = [
+        p
+        for p in reports_dir.iterdir()
+        if p.is_file() and p.suffix == ".svg" and not p.is_symlink()
+    ]
     entries.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return [p.name for p in entries]
 
 
 def _safe_report_path(reports_dir: Path, name: str) -> Path | None:
     """The report file ``name`` resolves to, or ``None`` if ``name`` is
-    unsafe (path traversal) or not an ``.svg`` (task t9 criterion 3).
+    unsafe (path traversal, a symlink, or escapes ``reports_dir`` once
+    resolved) or not an ``.svg`` (task t9 criterion 3; symlink/resolve check
+    Qodo review Q8).
 
-    Rejects on the raw (already-unquoted) name rather than trusting
-    ``Path.resolve()`` to sort it out — no ``/``, no ``..``, no leading dot
-    segment, and the file must actually end in ``.svg``.
+    Rejects on the raw (already-unquoted) name first — no ``/``, no ``..``,
+    no leading dot segment, and the file must actually end in ``.svg`` — then
+    rejects a symlink entry outright (``path.is_symlink()``) and finally
+    resolves both the reports directory and the candidate
+    (``Path.resolve(strict=True)``) and rejects unless the resolved candidate
+    is actually inside the resolved directory. That last check is what stops
+    a symlinked *directory* under ``reports_dir`` (not just a symlinked file)
+    from being used to escape it.
     """
     if not name or not name.endswith(".svg"):
         return None
     if "/" in name or "\\" in name or ".." in name:
         return None
-    return reports_dir / name
+    candidate = reports_dir / name
+    if candidate.is_symlink():
+        return None
+    try:
+        resolved_dir = reports_dir.resolve(strict=True)
+        resolved_candidate = candidate.resolve(strict=True)
+    except OSError:
+        return None
+    if resolved_dir not in resolved_candidate.parents:
+        return None
+    return candidate
 
 
 class _NotFound(Exception):

@@ -37,7 +37,7 @@ def _isolated_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("SENSIBO_DASHBOARD_URL", raising=False)
 
 
-@pytest.fixture()
+@pytest.fixture
 def _seeded_store(tmp_path: Path) -> None:
     """A store with at least one location so render_report has something to draw."""
     store = Store(db_path=tmp_path / "sensibo.db")
@@ -162,6 +162,75 @@ def test_apply_json_shape(
     assert payload["outcomes"][0]["transport"] == "webhook"
     assert payload["outcomes"][0]["ok"] is True
     assert payload["execution"] == EXECUTION_LOCAL
+
+
+def test_apply_all_transports_failing_raises_and_does_not_advance_meta(
+    _seeded_store, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+) -> None:
+    """Q5: a configured transport that fails on every leg must not be
+    reported as delivered, and must not advance the scheduling meta -- the
+    next `sensibo report daily --apply` should still find it due."""
+    monkeypatch.setenv(WEBHOOK_VAR, "https://example.invalid/hook/super-secret")
+    monkeypatch.setattr(
+        "sensibo.report.deliver.send",
+        lambda payload, config: [Outcome("webhook", False, "HTTP 500")],
+    )
+
+    rc = main(["report", "daily", "--apply"])
+    assert rc == 2
+
+    store = Store(db_path=tmp_path / "sensibo.db")
+    try:
+        assert store.get_meta("last_daily_report_at") is None
+    finally:
+        store.close()
+
+    # The failed transport's redacted detail (never the raw webhook URL)
+    # appears in the CliError diagnostic on stderr.
+    stderr = capsys.readouterr().err
+    assert "example.invalid" not in stderr
+    assert "webhook" in stderr
+    assert "SENSIBO_NOTIFY_WEBHOOK" in stderr
+
+
+def test_apply_all_transports_failing_json_mode_emits_standard_error_shape(
+    _seeded_store, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(WEBHOOK_VAR, "https://example.invalid/hook")
+    monkeypatch.setattr(
+        "sensibo.report.deliver.send",
+        lambda payload, config: [Outcome("webhook", False, "HTTP 500")],
+    )
+
+    rc = main(["report", "daily", "--apply", "--json"])
+    assert rc == 2
+    err = json.loads(capsys.readouterr().err)
+    assert err["code"] == 2
+    assert "webhook" in err["message"]
+
+
+def test_apply_partial_delivery_success_counts_as_delivered(
+    _seeded_store, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One failing transport alongside one that succeeds still counts as
+    delivered=True and still advances the meta."""
+    monkeypatch.setenv(WEBHOOK_VAR, "https://example.invalid/hook")
+    monkeypatch.setenv(SCRIPT_VAR, str(tmp_path / "notify.sh"))
+    monkeypatch.setattr(
+        "sensibo.report.deliver.send",
+        lambda payload, config: [
+            Outcome("webhook", False, "HTTP 500"),
+            Outcome("script", True, "delivered"),
+        ],
+    )
+
+    rc = main(["report", "daily", "--apply", "--json"])
+    assert rc == 0
+    store = Store(db_path=tmp_path / "sensibo.db")
+    try:
+        assert store.get_meta("last_daily_report_at") is not None
+    finally:
+        store.close()
 
 
 def test_apply_records_meta_so_daemon_scheduler_sees_it_as_sent(
