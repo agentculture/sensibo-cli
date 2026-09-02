@@ -26,7 +26,14 @@ which is what makes cross-room rules possible):
 * ``{"type": "occupancy", "location": <name>, "occupied": <bool>,
   "field": <optional; defaults to motion/roomIsOccupied>}``;
 * ``{"type": "time_window", "start": "HH:MM", "end": "HH:MM"}`` (wraps midnight
-  when ``start > end``).
+  when ``start > end``);
+* ``{"type": "stale", "location": <name>, "after_seconds": <optional positive
+  int>}`` — true when the location's persisted health (written by the collector,
+  read back through :meth:`sensibo.store.Store.get_health`) is anything but
+  ``ok``, or, when ``after_seconds`` is given, when its last good reading is
+  older than that. A location with no health row at all counts as stale:
+  silence we cannot explain is not evidence of health. This is the leaf that
+  lets a rule refuse to trust a dead room's motion or temperature.
 """
 
 from __future__ import annotations
@@ -47,7 +54,13 @@ EXECUTION_LOCAL = "local (stops when this daemon stops)"
 THRESHOLD_OPS = (">", ">=", "<", "<=", "==", "!=")
 
 #: Condition ``type`` values a leaf may declare.
-LEAF_TYPES = ("threshold", "occupancy", "time_window")
+LEAF_TYPES = ("threshold", "occupancy", "time_window", "stale")
+
+#: The exact key set a ``stale`` leaf may carry. Unlike the older leaves this
+#: one is closed: a typo'd key here would silently widen or narrow the set of
+#: conditions under which a rule drives a compressor, so it is rejected at
+#: validation rather than ignored at evaluation.
+STALE_KEYS = frozenset({"type", "location", "after_seconds"})
 
 #: Occupancy fields tried, in order, when a rule's occupancy condition does not
 #: name a specific field. A Room Sensor reports ``motion``; a pod may surface
@@ -203,6 +216,25 @@ def _validate_leaf(cond: dict[str, Any], rule_name: str) -> None:
     elif kind == "time_window":
         _validate_hhmm(cond.get("start"), "start", rule_name)
         _validate_hhmm(cond.get("end"), "end", rule_name)
+    elif kind == "stale":
+        _validate_stale(cond, rule_name)
+
+
+def _validate_stale(cond: dict[str, Any], rule_name: str) -> None:
+    unknown = sorted(set(cond) - STALE_KEYS)
+    if unknown:
+        raise RuleValidationError(
+            f"rule {rule_name!r}: stale condition has unknown key(s): {', '.join(unknown)} "
+            f"(allowed: {', '.join(sorted(STALE_KEYS))})"
+        )
+    _require_nonempty_str(cond.get("location"), "location")
+    if "after_seconds" in cond:
+        value = cond["after_seconds"]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise RuleValidationError(
+                f"rule {rule_name!r}: stale 'after_seconds' must be a positive whole "
+                "number of seconds"
+            )
 
 
 def _validate_hhmm(value: Any, field: str, rule_name: str) -> None:

@@ -125,7 +125,11 @@ AC state, the target state, and the diff — and changes nothing.
 - **`sensibo/rules/`** — the local rules engine. **Implemented.** A rule is
   declarative JSON (a name, a target pod, an `acState` action, and a tree of
   conditions over current store readings — thresholds, time-of-day windows,
-  occupancy, and cross-room combinations addressing locations by name through
+  occupancy, sensor staleness (`{"type": "stale", "location": …,
+  "after_seconds": …}`, which reads the health row the collector persists so a
+  rule can refuse to trust a room that stopped reporting — see
+  `examples/stale-room.rule.json`), and cross-room combinations addressing
+  locations by name through
   `sensibo.store.resolve_location`). It imports the store and the API client and
   is imported by the CLI, but never imports `sensibo.cli` (same layering rule as
   the store). Three safety properties are load-bearing and tested: a per-pod
