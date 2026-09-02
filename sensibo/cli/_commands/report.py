@@ -146,23 +146,23 @@ def cmd_report(args: argparse.Namespace, *, kind: str) -> int:
 
         if json_mode:
             emit_result(result, json_mode=True)
-            return 0
-
-        lines = [f"report {kind}: window={window_hours}h"]
-        if apply:
-            lines.append(f"  written to: {written_to}")
-            lines.append(f"  delivered to {len(outcomes)} transport(s):")
-            for outcome in outcomes:
-                mark = "ok" if outcome["ok"] else "FAILED"
-                lines.append(f"    {outcome['transport']}: {mark} ({outcome['detail']})")
         else:
-            if written_to:
+
+            lines = [f"report {kind}: window={window_hours}h"]
+            if apply:
                 lines.append(f"  written to: {written_to}")
-            lines.append(f"  would write to: {would_path}")
-            lines.append(render_dry_run(payload, config))
-        lines.append(f"  {EXECUTION_FIELD}: {EXECUTION_LOCAL}")
-        emit_result("\n".join(lines), json_mode=False)
-        return 0
+                lines.append(f"  delivered to {len(outcomes)} transport(s):")
+                for outcome in outcomes:
+                    mark = "ok" if outcome["ok"] else "FAILED"
+                    lines.append(f"    {outcome['transport']}: {mark} ({outcome['detail']})")
+            else:
+                if written_to:
+                    lines.append(f"  written to: {written_to}")
+                lines.append(f"  would write to: {would_path}")
+                lines.append(render_dry_run(payload, config))
+            lines.append(f"  {EXECUTION_FIELD}: {EXECUTION_LOCAL}")
+            emit_result("\n".join(lines), json_mode=False)
+    return 0
 
 
 def cmd_report_daily(args: argparse.Namespace) -> int:
