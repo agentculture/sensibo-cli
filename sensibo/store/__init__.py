@@ -24,8 +24,14 @@ Two Sensibo-specific traps this package encodes directly in its API (see
 Public API
 ----------
 
-* :class:`Store` — open/close a db, record locations and readings, query.
-* :class:`LocationRecord`, :class:`ReadingRecord` — the two row shapes.
+* :class:`Store` — open/close a db, record locations and readings, query,
+  and track sensor health (:meth:`Store.set_health`,
+  :meth:`Store.record_transition`, :meth:`Store.record_notification`).
+* :class:`LocationRecord`, :class:`ReadingRecord`, :class:`HealthRecord`,
+  :class:`TransitionRecord`, :class:`NotificationRecord` — the row shapes.
+* :class:`StoreVersionError`, :data:`SCHEMA_VERSION` — the fail-closed schema
+  version gate: opening a db written by a newer build raises rather than
+  writing rows that build would misread.
 * :data:`DEFAULT_RETENTION_DAYS` — the retention-window default.
 * :func:`default_db_path` — where the db lives absent an explicit override.
 * :func:`derive_unit` — the unit-tagging rule readings are stored under.
@@ -38,6 +44,7 @@ Public API
 from __future__ import annotations
 
 from ._paths import default_db_path, resolve_db_path
+from ._schema import SCHEMA_VERSION, StoreVersionError
 from ._units import derive_unit
 from .rooms import (
     DEFAULT_STALE_AFTER_HOURS,
@@ -51,9 +58,12 @@ from .store import (
     DEFAULT_RETENTION_DAYS,
     KIND_POD,
     KIND_ROOM_SENSOR,
+    HealthRecord,
     LocationRecord,
+    NotificationRecord,
     ReadingRecord,
     Store,
+    TransitionRecord,
 )
 
 __all__ = [
@@ -61,12 +71,17 @@ __all__ = [
     "DEFAULT_STALE_AFTER_HOURS",
     "KIND_POD",
     "KIND_ROOM_SENSOR",
+    "SCHEMA_VERSION",
     "AmbiguousLocationError",
+    "HealthRecord",
     "LocationNotFoundError",
     "LocationResolutionError",
     "LocationRecord",
+    "NotificationRecord",
     "ReadingRecord",
     "Store",
+    "StoreVersionError",
+    "TransitionRecord",
     "default_db_path",
     "derive_unit",
     "is_stale",

@@ -28,6 +28,10 @@ _KNOWN_UNITS: dict[str, str] = {
     "tvoc": "ppb",
     "co2": "ppm",
     "battery": "%",
+    # Room Sensors report a raw cell voltage in millivolts alongside the
+    # percentage. Leaving it untagged next to `battery` is exactly the
+    # ambiguity `unit` exists to prevent, so it is fixed for every model.
+    "batteryVoltage": "mV",
 }
 
 #: pm25's unit depends on productModel — see the module docstring.
