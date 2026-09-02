@@ -111,14 +111,12 @@ doesn't — callers fall back to `stale`).
 
 ### `sensibo_health` (task t9)
 
-`sensibo.mcp_server._tools.sensibo_health(since=None, db=None)` is
-implemented and unit-tested (`tests/test_mcp_tools.py`) but **not yet wired
-onto the MCP server** (`sensibo.mcp_server.build_server` still registers only
-the five tools above) — that wiring is left to a follow-on task so this one
-stays inside its file list. Once wired, it will mirror `sensibo query health
---json`: every location's current health row (`status` — one of `ok` /
-`down` / `unknown` / `unknown_parent_down` — `since`, `last_ok`,
-`parent_pod_id`) plus every transition since an optional ISO 8601 `since`
+`sensibo_health(since=None, db=None)` is registered on the MCP server
+alongside the five tools above (`sensibo.mcp_server.build_server`). It
+mirrors `sensibo query health --json`: every location's current health row
+(`status` — one of `ok` / `down` / `unknown` / `unknown_parent_down` —
+`since`, `last_ok`, `parent_pod_id`) plus every transition since an optional
+ISO 8601 `since`
 timestamp, each transition carrying `duration_seconds` when it is the one
 that *closed* an outage (a transition back to `ok`) and `None` otherwise
 (including an outage still open). The payload also reports the collector's
