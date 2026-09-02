@@ -48,7 +48,7 @@ from sensibo.web.server import (
 _ALLOWED_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 
-@pytest.fixture()
+@pytest.fixture
 def loopback_only(monkeypatch: pytest.MonkeyPatch) -> None:
     """Block any socket connection whose target host isn't loopback."""
     orig_connect = socket.socket.connect
@@ -124,7 +124,7 @@ def _seed(db_path: Path) -> None:
         store.upsert_location("pod-stale", kind="pod", product_model="airq", seen_at=1.0)
 
 
-@pytest.fixture()
+@pytest.fixture
 def running_server(tmp_path: Path, loopback_only: None):
     db = tmp_path / "sensibo.db"
     _seed(db)
@@ -691,7 +691,7 @@ def test_index_shows_never_and_unknown_heartbeat_when_no_cycle_has_run(running_s
 # --- reports: serving offline SVGs from the reports directory (task t9) -----
 
 
-@pytest.fixture()
+@pytest.fixture
 def reports_server(tmp_path: Path, loopback_only: None):
     db = tmp_path / "sensibo.db"
     _seed(db)
@@ -760,6 +760,35 @@ def test_get_report_unknown_name_404(reports_server) -> None:
     srv, _reports_dir = reports_server
     status, _body = _get(srv, "/reports/does-not-exist.svg")
     assert status == 404
+
+
+def test_get_report_rejects_a_symlink_that_escapes_the_reports_dir_404(reports_server) -> None:
+    """Qodo review Q8: a symlink named ``leak.svg`` inside the reports
+    directory but pointing at a file outside it must 404, not follow the
+    link and serve the outside file's contents."""
+    srv, reports_dir = reports_server
+    secret = reports_dir.parent / "sensibo.db"
+    assert secret.is_file()
+
+    link = reports_dir / "leak.svg"
+    link.symlink_to(secret)
+
+    status, body = _get(srv, "/reports/leak.svg")
+    assert status == 404
+    assert "sqlite" not in body.lower()
+
+
+def test_index_omits_a_symlink_that_escapes_the_reports_dir(reports_server) -> None:
+    """The same symlink must not appear in the index listing either."""
+    srv, reports_dir = reports_server
+    secret = reports_dir.parent / "sensibo.db"
+    (reports_dir / "leak.svg").symlink_to(secret)
+    _write_report(reports_dir, "real.svg")
+
+    status, body = _get(srv, "/")
+    assert status == 200
+    assert "real.svg" in body
+    assert "leak.svg" not in body
 
 
 def test_index_lists_reports_newest_first(reports_server) -> None:

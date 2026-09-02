@@ -13,6 +13,8 @@ on the host's timezone or the wall clock.
 from __future__ import annotations
 
 import datetime
+import time
+import zoneinfo
 from pathlib import Path
 
 import pytest
@@ -33,6 +35,7 @@ from sensibo.report.schedule import (
     META_LAST_WEEKLY,
     WEEKLY,
     ReportSchedule,
+    _most_recent_daily_instant,
     due_reports,
 )
 from sensibo.store import Store
@@ -56,7 +59,7 @@ def test_defaults() -> None:
 
 def test_is_frozen() -> None:
     s = ReportSchedule()
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="cannot assign to field"):
         s.daily_at = "08:00"  # type: ignore[misc]
 
 
@@ -223,6 +226,40 @@ def test_host_local_tz_default_is_used_when_tz_not_given() -> None:
     assert DAILY in due_plus_twelve
 
 
+def test_dst_transition_daily_instant_stays_07_00_wall_clock_on_both_sides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Europe/London goes to BST on 2026-03-29; the 07:00 candidate must
+    resolve to 07:00 wall-clock on both sides of that transition, not shift
+    by the DST delta from reusing one fixed offset (Qodo review Q16).
+
+    Uses the naive-local path (``tz=None``) with the system zone set to
+    Europe/London, so the fix under test — converting via
+    ``datetime.astimezone()`` rather than a frozen "now" offset — is what's
+    actually exercised.
+    """
+    monkeypatch.setenv("TZ", "Europe/London")
+    time.tzset()
+    try:
+        london = zoneinfo.ZoneInfo("Europe/London")
+        before = datetime.datetime(2026, 3, 28, 12, 0, tzinfo=london).timestamp()
+        after = datetime.datetime(2026, 3, 30, 12, 0, tzinfo=london).timestamp()
+
+        instant_before = _most_recent_daily_instant("07:00", before, None)
+        instant_after = _most_recent_daily_instant("07:00", after, None)
+
+        wall_before = datetime.datetime.fromtimestamp(instant_before, tz=london)
+        wall_after = datetime.datetime.fromtimestamp(instant_after, tz=london)
+
+        assert (wall_before.hour, wall_before.minute) == (7, 0)
+        assert (wall_after.hour, wall_after.minute) == (7, 0)
+        assert wall_before.date() == datetime.date(2026, 3, 28)
+        assert wall_after.date() == datetime.date(2026, 3, 30)
+    finally:
+        monkeypatch.delenv("TZ", raising=False)
+        time.tzset()
+
+
 # --- sensibo.report.deliver: reports_dir / write_report ----------------------
 
 NOW = _epoch(2026, 9, 2, 7, 1)  # a Wednesday
@@ -318,7 +355,7 @@ def test_deliver_report_without_notifier_calls_send(monkeypatch: pytest.MonkeyPa
 # --- sensibo.report.deliver: run_due_reports ----------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def _store(tmp_path: Path) -> Store:
     s = Store(db_path=tmp_path / "t.db")
     yield s
@@ -391,3 +428,124 @@ def test_run_due_reports_never_raises_and_leaves_meta_unset_on_failure(
     assert _store.get_meta(META_LAST_DAILY) is None
     assert _store.get_meta(META_LAST_WEEKLY) is None
     assert logged  # something was logged
+
+
+# --- Q4: failed delivery leaves the meta unset so the next cycle retries ----
+
+
+def test_run_due_reports_total_delivery_failure_leaves_meta_unset(
+    _store: Store, tmp_path: Path
+) -> None:
+    """A configured transport that fails on every kind must not be recorded
+    as sent — the SVG is still written (idempotent to re-render), but the
+    meta key stays unset so the next cycle retries delivery."""
+    schedule = ReportSchedule()
+    target_dir = tmp_path / "reports"
+    config = NotifyConfig(webhook_url="https://example.invalid/hook")
+
+    runs = run_due_reports(
+        _store,
+        schedule,
+        config,
+        NOW,
+        lambda payload: [Outcome("webhook", False, "HTTP 500")],
+        target_dir,
+    )
+
+    kinds = {r.kind for r in runs}
+    assert kinds == {DAILY, WEEKLY}
+    for run in runs:
+        assert run.path.exists()  # the file on disk was still written
+        assert run.outcomes[0].ok is False
+
+    assert _store.get_meta(META_LAST_DAILY) is None
+    assert _store.get_meta(META_LAST_WEEKLY) is None
+
+
+def test_run_due_reports_records_meta_when_no_transport_is_configured(
+    _store: Store, tmp_path: Path
+) -> None:
+    """With no transport configured, the file on disk IS the deliverable, so
+    the meta key is still recorded even though `send` reports "not
+    configured" (not ``ok``)."""
+    schedule = ReportSchedule()
+    target_dir = tmp_path / "reports"
+
+    runs = run_due_reports(_store, schedule, NotifyConfig(), NOW, None, target_dir)
+
+    kinds = {r.kind for r in runs}
+    assert kinds == {DAILY, WEEKLY}
+    assert _store.get_meta(META_LAST_DAILY) is not None
+    assert _store.get_meta(META_LAST_WEEKLY) is not None
+
+
+def test_run_due_reports_records_meta_when_at_least_one_transport_ok(
+    _store: Store, tmp_path: Path
+) -> None:
+    """A mix of one failing and one ok transport still counts as delivered."""
+    schedule = ReportSchedule()
+    target_dir = tmp_path / "reports"
+    config = NotifyConfig(webhook_url="https://example.invalid/hook", script_path="/bin/true")
+
+    def _notifier(_payload):
+        return [Outcome("webhook", False, "HTTP 500"), Outcome("script", True, "delivered")]
+
+    runs = run_due_reports(_store, schedule, config, NOW, _notifier, target_dir)
+
+    assert {r.kind for r in runs} == {DAILY, WEEKLY}
+    assert _store.get_meta(META_LAST_DAILY) is not None
+    assert _store.get_meta(META_LAST_WEEKLY) is not None
+
+
+# --- Q10: a redacted exception never leaks the webhook URL into a log line --
+
+
+def test_run_due_reports_logs_redacted_diagnostic_on_render_failure(
+    _store: Store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret_url = "https://example.invalid/hook/super-secret-token"
+    config = NotifyConfig(webhook_url=secret_url)
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError(f"failed to reach {secret_url}")
+
+    monkeypatch.setattr("sensibo.report.deliver.render_report", _boom)
+
+    logged: list[str] = []
+    schedule = ReportSchedule()
+    runs = run_due_reports(
+        _store, schedule, config, NOW, None, tmp_path / "reports", log=logged.append
+    )
+
+    assert runs == []
+    assert logged
+    assert all(secret_url not in line for line in logged)
+
+
+# --- Q15: a malformed last-sent meta value is "never sent", not a crash ----
+
+
+def test_run_due_reports_malformed_daily_meta_is_treated_as_never_sent(
+    _store: Store, tmp_path: Path
+) -> None:
+    _store.set_meta(META_LAST_DAILY, "garbage")
+    _store.set_meta(META_LAST_WEEKLY, repr(NOW))  # already sent -> not due
+
+    logged: list[str] = []
+    schedule = ReportSchedule()
+    runs = run_due_reports(
+        _store,
+        schedule,
+        NotifyConfig(),
+        NOW,
+        None,
+        tmp_path / "reports",
+        log=logged.append,
+    )
+
+    # Never raises, daily is treated as never-sent (due), weekly still
+    # processes on its own (valid) meta value and is correctly not due.
+    kinds = {r.kind for r in runs}
+    assert kinds == {DAILY}
+    assert logged  # one redacted diagnostic about the malformed value
+    assert _store.get_meta(META_LAST_DAILY) is not None

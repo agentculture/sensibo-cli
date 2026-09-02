@@ -9,11 +9,17 @@ shape every write verb in this project uses:
 * ``--out PATH`` writes the rendered SVG to ``PATH`` — writing a file the
   operator explicitly asked for is fine without ``--apply``, same as any other
   verb that takes an explicit output path;
-* ``--apply`` writes the report into the reports directory, records the
-  last-sent meta key (so the in-daemon scheduler in ``sensibo collect
-  --daemon`` treats this as satisfying that kind's next-due check), and
-  delivers a notification (never a file upload — just a small JSON message
-  naming the path) through the configured transport(s), **exactly once**.
+* ``--apply`` writes the report into the reports directory and delivers a
+  notification (never a file upload — just a small JSON message naming the
+  path) through the configured transport(s), **exactly once**. ``delivered``
+  is derived from the outcomes (any transport ``ok``); the last-sent meta key
+  (so the in-daemon scheduler in ``sensibo collect --daemon`` treats this as
+  satisfying that kind's next-due check) is recorded only when delivery
+  actually succeeded on at least one configured transport, or none is
+  configured at all (the file on disk is then itself the deliverable). A
+  configured transport that failed on every leg raises :class:`CliError`
+  (exit 2) instead of reporting success, so the next attempt still finds the
+  report due (Qodo review Q5).
 
 Every response carries ``execution: local (stops when this daemon stops)``:
 like ``notify test``, this only ever runs on demand or while ``sensibo
@@ -28,6 +34,7 @@ from pathlib import Path
 
 from sensibo.cli._commands._automation import JSON_HELP
 from sensibo.cli._commands.overview import emit_overview
+from sensibo.cli._errors import EXIT_ENV_ERROR, CliError
 from sensibo.cli._output import emit_result
 from sensibo.health import EXECUTION_LOCAL
 from sensibo.notify import Outcome, redact, render_dry_run, resolve_notify_config
@@ -90,11 +97,33 @@ def cmd_report(args: argparse.Namespace, *, kind: str) -> int:
 
         if apply:
             path = write_report(kind, svg, now, target_dir)
-            store.set_meta(_KIND_TO_META[kind], repr(now))
             raw_outcomes = deliver_report(kind, path, config, resolve_dashboard_url())
             outcomes = _outcomes_to_list(raw_outcomes)
-            delivered = True
+            delivered = any(bool(outcome["ok"]) for outcome in outcomes)
             written_to = str(path)
+
+            # Q5: a configured transport that failed on every leg must not
+            # be reported as success, and must not advance the scheduling
+            # meta (so a retry, e.g. via `sensibo report daily --apply`, is
+            # still due). No transport configured at all is not this case —
+            # the file on disk written above is itself the deliverable, same
+            # rule as the daemon's run_due_reports (Q4).
+            if config.configured and not delivered:
+                failed = ", ".join(
+                    f"{outcome['transport']} ({outcome['detail']})"
+                    for outcome in outcomes
+                    if not outcome["ok"]
+                )
+                raise CliError(
+                    code=EXIT_ENV_ERROR,
+                    message=f"report delivery failed on: {failed}",
+                    remediation=(
+                        "check SENSIBO_NOTIFY_WEBHOOK / SENSIBO_NOTIFY_SCRIPT and run "
+                        "sensibo notify test --apply"
+                    ),
+                )
+
+            store.set_meta(_KIND_TO_META[kind], repr(now))
         else:
             would_path = target_dir / report_filename(kind, now)
             payload = build_payload(kind, would_path, resolve_dashboard_url())

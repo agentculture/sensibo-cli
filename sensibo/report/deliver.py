@@ -16,10 +16,14 @@ Two concerns kept apart:
   notification this project sends.
 
 :func:`run_due_reports` is the glue the daemon loop calls after every cycle:
-ask :func:`sensibo.report.schedule.due_reports` what's due, render+write+set
-the last-sent meta+deliver each. It never raises — a scheduling misconfig or a
-delivery hiccup here must not take down collection; on any per-kind failure
-the meta key is left unset so the same kind is retried next cycle.
+ask :func:`sensibo.report.schedule.due_reports` what's due, render+write+
+deliver each, then set the last-sent meta — but only once delivery is known
+good (no transport configured, or at least one transport reported ``ok``).
+It never raises — a scheduling misconfig or a delivery hiccup here must not
+take down collection; a malformed last-sent meta value is treated as "never
+sent" rather than aborting the cycle, and on any per-kind render/write
+failure or total delivery failure the meta key is left unset so the same
+kind is retried next cycle.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sensibo.notify import NotifyConfig, Payload, send
+from sensibo.notify import NotifyConfig, Payload, redact, send
 from sensibo.report.chart import render_report
 from sensibo.report.schedule import (
     DAILY,
@@ -169,6 +173,26 @@ class ReportRun:
     outcomes: list[Any]
 
 
+def _parse_last_sent(
+    raw: str | None, meta_key: str, config: NotifyConfig, logger: Logger
+) -> float | None:
+    """Parse one ``last_*_report_at`` meta value; malformed counts as "never sent".
+
+    Never raises (Qodo review Q15): a store meta value can be corrupted by
+    something outside this process's control, and one bad value must not
+    abort scheduling for the *other* report kind. On a malformed value, logs
+    one redacted diagnostic and returns ``None`` (which :func:`due_reports`
+    treats as "never sent", i.e. always due).
+    """
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError) as err:
+        logger(redact(f"report: malformed {meta_key} meta {raw!r}: {err}", config))
+        return None
+
+
 def run_due_reports(
     store: Store,
     schedule: ReportSchedule,
@@ -185,21 +209,36 @@ def run_due_reports(
     meta table, asks :func:`~sensibo.report.schedule.due_reports` which kinds
     are due, and for each one: render via
     :func:`~sensibo.report.chart.render_report`, write via
-    :func:`write_report`, set the meta key, then deliver via
-    :func:`deliver_report`. The meta key is set **only after** a successful
-    render+write, so a failure retries the same kind next cycle.
+    :func:`write_report`, deliver via :func:`deliver_report`, then set the
+    meta key — but **only** when (a) no transport is configured (the file on
+    disk *is* the deliverable) or (b) at least one configured transport
+    reported ``ok`` (Qodo review Q4). On total delivery failure the meta key
+    is left unchanged, re-rendering to the same filename next cycle is
+    idempotent, and one redacted diagnostic is logged.
 
-    Never raises: any exception for one kind is logged (via ``log``, default
-    a no-op) and that kind is simply skipped this cycle — a bad report must
-    never take down the collector daemon that called this.
+    Never raises: any exception for one kind — including a malformed
+    last-sent meta value (Q15) — is logged (via ``log``, default a no-op,
+    with the configured webhook URL redacted per Q10) and that kind is
+    simply skipped or retried next cycle. A bad report must never take down
+    the collector daemon that called this.
     """
     logger = log or _noop
-    last_daily_raw = store.get_meta(META_LAST_DAILY)
-    last_weekly_raw = store.get_meta(META_LAST_WEEKLY)
-    last_daily_at = float(last_daily_raw) if last_daily_raw is not None else None
-    last_weekly_at = float(last_weekly_raw) if last_weekly_raw is not None else None
 
-    due = due_reports(schedule, now, last_daily_at, last_weekly_at)
+    # Q15: timestamp parsing lives inside the never-raises boundary — a
+    # malformed value for one kind must not stop the other kind processing.
+    last_daily_at = _parse_last_sent(
+        store.get_meta(META_LAST_DAILY), META_LAST_DAILY, config, logger
+    )
+    last_weekly_at = _parse_last_sent(
+        store.get_meta(META_LAST_WEEKLY), META_LAST_WEEKLY, config, logger
+    )
+
+    try:
+        due = due_reports(schedule, now, last_daily_at, last_weekly_at)
+    except Exception as err:  # noqa: BLE001 - must never propagate into the daemon loop
+        logger(redact(f"report: schedule computation failed this cycle: {err}", config))
+        return []
+
     dashboard_url = resolve_dashboard_url()
 
     runs: list[ReportRun] = []
@@ -207,11 +246,27 @@ def run_due_reports(
         try:
             svg = render_report(store, WINDOW_HOURS[kind], now=now)
             path = write_report(kind, svg, now, reports_dir_path)
-            meta_key = META_LAST_DAILY if kind == DAILY else META_LAST_WEEKLY
-            store.set_meta(meta_key, repr(now))
             outcomes = deliver_report(kind, path, config, dashboard_url, notifier=notifier)
         except Exception as err:  # noqa: BLE001 - must never propagate into the daemon loop
-            logger(f"report: {kind} report failed this cycle: {err}")
+            logger(redact(f"report: {kind} report failed this cycle: {err}", config))
             continue
+
+        # Q4: only persist "last sent" when the file itself is the
+        # deliverable (no transport configured) or delivery actually
+        # succeeded on at least one transport — otherwise leave the meta
+        # unset so the same kind is retried (and re-rendered, idempotently)
+        # next cycle.
+        delivered_ok = any(getattr(outcome, "ok", False) for outcome in outcomes)
+        if not config.configured or delivered_ok:
+            meta_key = META_LAST_DAILY if kind == DAILY else META_LAST_WEEKLY
+            store.set_meta(meta_key, repr(now))
+        else:
+            logger(
+                redact(
+                    f"report: {kind} report delivery failed on every configured "
+                    "transport; will retry next cycle",
+                    config,
+                )
+            )
         runs.append(ReportRun(kind=kind, path=path, outcomes=outcomes))
     return runs
