@@ -169,6 +169,7 @@ def test_webhook_posts_json_with_content_type_header(monkeypatch: pytest.MonkeyP
     assert request.get_method() == "POST"
     assert request.full_url == WEBHOOK_URL
     assert request.headers.get("Content-type") == "application/json"
+    assert request.headers.get("User-agent", "").startswith("sensibo-cli/")
     assert json.loads(request.data.decode("utf-8"))["message"] == payload.message
     assert outcomes == [Outcome(TRANSPORT_WEBHOOK, True, "delivered")]
 
@@ -386,3 +387,21 @@ def test_webhook_refuses_redirects_instead_of_reposting_elsewhere() -> None:
         isinstance(h, transport_module._NoRedirectHandler)
         for h in transport_module._OPENER.handlers
     )
+
+
+def test_payload_json_mirrors_message_into_content_and_text() -> None:
+    """Discord renders ``content``; Slack-style receivers render ``text``."""
+    import json as _json
+
+    payload = Payload(
+        kind="down",
+        location="ms-1",
+        status="down",
+        since=None,
+        last_ok=None,
+        message="bedroom sensor is down",
+    )
+    body = _json.loads(payload.to_json())
+    assert body["content"] == "bedroom sensor is down"
+    assert body["text"] == "bedroom sensor is down"
+    assert body["kind"] == "down"
