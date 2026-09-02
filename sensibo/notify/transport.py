@@ -28,10 +28,16 @@ import urllib.request
 from collections.abc import Collection
 from dataclasses import asdict, dataclass
 
+from sensibo import __version__
 from sensibo.health import EXECUTION_LOCAL
 from sensibo.notify._config import NotifyConfig
 
 #: Transport names used in :class:`Outcome.transport`.
+#: Sent on every webhook POST. Cloudflare-fronted receivers (Discord among
+#: them) reject urllib's default ``Python-urllib/x.y`` agent with
+#: 403 "error code: 1010"; a named agent is accepted (verified 2026-09-02).
+USER_AGENT = f"sensibo-cli/{__version__}"
+
 TRANSPORT_WEBHOOK = "webhook"
 TRANSPORT_SCRIPT = "script"
 TRANSPORT_NONE = "none"
@@ -56,8 +62,19 @@ class Payload:
     execution: str = EXECUTION_LOCAL
 
     def to_json(self) -> str:
-        """Compact JSON — the exact body sent over the wire / piped to stdin."""
-        return json.dumps(asdict(self), separators=(",", ":"))
+        """Compact JSON — the exact body sent over the wire / piped to stdin.
+
+        Besides the structured fields, the human ``message`` is mirrored into
+        ``content`` (what a Discord webhook renders) and ``text`` (Slack,
+        Mattermost, and most generic receivers), so a plain webhook URL from
+        those services shows the alert without any service-specific client.
+        Verified against Discord on 2026-09-02: without ``content`` it answers
+        400 "Cannot send an empty message".
+        """
+        body = asdict(self)
+        body["content"] = self.message
+        body["text"] = self.message
+        return json.dumps(body, separators=(",", ":"))
 
 
 @dataclass(frozen=True)
@@ -100,7 +117,7 @@ def _send_webhook(payload: Payload, config: NotifyConfig) -> Outcome:
         request = urllib.request.Request(
             url,
             data=payload.to_json().encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
             method="POST",
         )
         # The URL is operator-configured (an https:// webhook), so scheme auditing

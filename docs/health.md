@@ -262,9 +262,17 @@ sending would otherwise be a silent no-op.
   "since": "2026-09-02T05:52:00Z",
   "last_ok": "2026-09-02T05:51:09Z",
   "message": "room_sensor ms_o7dH4GeY is down as of 2026-09-02T05:52:00Z: last heard 2026-09-02T05:51:09Z, past the 900s threshold",
+  "content": "room_sensor ms_o7dH4GeY is down as of 2026-09-02T05:52:00Z: last heard 2026-09-02T05:51:09Z, past the 900s threshold",
+  "text": "room_sensor ms_o7dH4GeY is down as of 2026-09-02T05:52:00Z: last heard 2026-09-02T05:51:09Z, past the 900s threshold",
   "execution": "local (stops when this daemon stops)"
 }
 ```
+
+`content` and `text` mirror `message` so a plain Discord webhook URL
+(`content`) or a Slack / Mattermost incoming webhook (`text`) renders the
+alert as-is, with no service-specific client. Every POST carries
+`User-Agent: sensibo-cli/<version>`; Cloudflare-fronted receivers, Discord
+included, reject urllib's default agent with `403 error code: 1010`.
 
 `kind` is one of `down`, `recovered`, `collector_unhealthy`,
 `collector_recovered`, `report`, or `test` (`sensibo notify test`'s own
