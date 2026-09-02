@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from . import _schema
 from ._paths import resolve_db_path
@@ -364,10 +364,49 @@ class Store:
         if resolved_model is None:
             existing = self.get_location(location_id)
             resolved_model = existing.product_model if existing else None
+        rows = []
         for field, value in values.items():
-            self.record_reading(
-                location_id, field, value, timestamp=ts, product_model=resolved_model
+            unit = derive_unit(field, resolved_model)
+            value_numeric, value_text = _coerce_value(value)
+            rows.append((location_id, field, ts, value_numeric, value_text, unit))
+        # One transaction per poll, not one per field: each commit is an fsync
+        # under WAL, and 10.8 ms/row (measured 2026-09-02) made a 7-day fixture
+        # take minutes. Approved plan deviation d1.
+        with self._conn:
+            self._conn.executemany(_schema.UPSERT_READING_SQL, rows)
+
+    def record_series(
+        self,
+        location_id: str,
+        field: str,
+        points: Iterable[tuple[Timestamp, Any]],
+        *,
+        product_model: str | None = None,
+    ) -> int:
+        """Bulk-record one field's time series in a single transaction.
+
+        ``points`` is an iterable of ``(timestamp, value)`` pairs. This is the
+        fast path for ``historicalMeasurements`` backfill and for tests that
+        seed days of history: one ``executemany`` under one commit instead of
+        one commit per reading (approved plan deviation d1). Same upsert
+        semantics as :meth:`record_reading`. Returns the number of rows sent.
+        """
+        resolved_model = product_model
+        if resolved_model is None:
+            existing = self.get_location(location_id)
+            resolved_model = existing.product_model if existing else None
+        unit = derive_unit(field, resolved_model)
+        rows = []
+        for stamp, value in points:
+            value_numeric, value_text = _coerce_value(value)
+            rows.append(
+                (location_id, field, _normalize_timestamp(stamp), value_numeric, value_text, unit)
             )
+        if not rows:
+            return 0
+        with self._conn:
+            self._conn.executemany(_schema.UPSERT_READING_SQL, rows)
+        return len(rows)
 
     def latest_reading(self, location_id: str, field: str) -> ReadingRecord | None:
         row = self._conn.execute(_schema.SELECT_LATEST_READING_SQL, (location_id, field)).fetchone()
